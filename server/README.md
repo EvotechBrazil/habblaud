@@ -355,6 +355,36 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   `/ack` (mesma trava das mensagens). `canMessage` = há entregador (binário achado, ou auxiliar visto há até 10 s).
   Retorno 0 = entrou na fila da sessão (`delivered`); o Codex consome a fila a cada ~10 s, quando a sessão fica ociosa.
 
+## Grok
+
+A fonte do Grok Build CLI (`sources/grok/`) segue o contrato da do Codex: `provider: 'grok'`, ids `<conta>:<sessionId>`,
+`sessionId` = o UUID da sessão do Grok. Histórico no `HistorySet`; terminal com o parser dela (`SourceSet.parserFor`).
+
+- **Contas** (`sources/grok/accounts.ts`): `HABBLAUD_GROK_DIRS` (substitui) ou `GROK_HOME` e `~/.grok*` com cara de
+  Grok (`isGrokHome`: `active_sessions.json`, ou `sessions/` com pastas `%2F...`, ou `config.toml`; sem `projects/`
+  nem `thread-writer-locks/`). `auth.json`, `config.toml` e a memória nunca são lidos. Sem e-mail, plano nem uso.
+- **Sessões abertas** (`sources/grok/files.ts`, `source.ts`): `active_sessions.json` (`{session_id, pid, pid_start,
+  cwd, opened_at}`; o Grok troca o arquivo de inode a cada escrita), com o PID conferido fora do Docker. Sem o arquivo
+  (Docker): `updates.jsonl` modificado nos últimos 30 min, ou sessão aberta por hook (SessionStart sem SessionEnd) com
+  sinal de vida nas últimas 12 h. Evento de hook segura a presença por 60 s. A sala é o `cwd` do registro (ou do
+  `summary.json`, ou do hook).
+- **updates.jsonl** (`sources/grok/updates.ts`): fluxo ACP, uma linha por evento (`method` `session/update`:
+  `user_message_chunk`, `agent_thought_chunk`, `agent_message_chunk`, `tool_call`, `tool_call_update`, `plan`;
+  `_x.ai/session/update`: `turn_completed` com `usage` por turno e `stop_reason`, `hook_execution`,
+  `task_completed`, `auto_compact_completed`, `retry_state`). Status por instrução (abre) e `turn_completed`
+  (fecha); os `hook_execution` `user_prompt_submit`/`stop` também contam. Tokens somados por turno (`inputTokens`
+  já inclui o cache lido); sem custo (`costUsdTicks` tem unidade não documentada). Ferramentas do Grok mapeadas para
+  os nomes do Claude Code (`read_file` → Read, `search_replace` → Edit/Write, `run_terminal_command` → Bash, `grep`,
+  `list_dir` → LS, `todo_write` → TodoWrite, `web_fetch`, `spawn_subagent` → Agent, `use_tool`/`servidor__ferramenta`
+  → `mcp__…`). Começo de arquivo grande lido em segundo plano até 32 MB (`PREFIX_MAX_BYTES`).
+- **summary.json**: `generated_title` (título), `current_model_id`, `head_branch`, `created_at`, `last_active_at`.
+- **Eventos do hook** (`POST /api/grok/events`, `grok/http.ts`; o hook é `mod/habblaud-grok/hook.mjs`, instalado por
+  `npm run grok:install` em `<GROK_HOME>/hooks/habblaud.json`): mesma trava dos do Codex. `GrokLive.applyHookEvent`
+  aceita as chaves em snake_case e camelCase (`session_id`/`sessionId`, `tool_name`/`toolName`...). UserPromptSubmit,
+  PreToolUse (com a atividade), PostToolUse = trabalhando; Notification `permission_prompt` = esperando ("aprovar uma
+  permissão"), `idle_prompt`/Stop/StopFailure/StopCancelled = ocioso; SubagentStart conta um subagente; SessionEnd
+  fecha. Sem aprovação pelo escritório, sem mensagens.
+
 ## Habblaud World
 
 Ligado por padrão, apontando para `server.habblaud.com` (`DEFAULT_WORLD_URL` em `config.ts`); nada sai do computador
@@ -484,6 +514,8 @@ em `shared/world/city.ts` (fonte da verdade; o servidor do mundo guarda a cópia
 | `HABBLAUD_CODEX` | ligado | `0` desliga a fonte do Codex |
 | `HABBLAUD_CODEX_DIRS` | — | pastas do Codex separadas por vírgula; substitui a detecção (`CODEX_HOME` e `~/.codex*`) |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH | binário do Codex para o `codex queue` (modo Node e `npm run codex:bridge`) |
+| `HABBLAUD_GROK` | ligado | `0` desliga a fonte do Grok |
+| `HABBLAUD_GROK_DIRS` | — | pastas do Grok separadas por vírgula; substitui a detecção (`GROK_HOME` e `~/.grok*`) |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0`, `false`, `off` ou `no` desligam só as mensagens pelo escritório |
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |
 | `HABBLAUD_DATA_DIR` | `~/.habblaud` (Docker: `/data`) | estado do Habblaud (nomes e personagens dos projetos persistidos em `names.json`, linha do tempo em `timeline/`, estatísticas do Meu dia em `stats/`, última verificação de versão em `updates.json`) |

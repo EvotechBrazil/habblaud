@@ -10,6 +10,16 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Grok no escritório.** As sessões do Grok Build CLI (xAI) entram no escritório como as do Codex: personagem com o
+  chip vazado e o selo **GROK**, sala do projeto, atividade, tarefas, terminal, histórico e tokens no Meu dia (sem
+  custo). O Habblaud lê sozinho `~/.grok/active_sessions.json` e `~/.grok/sessions/*/*/updates.jsonl` (ou
+  `GROK_HOME`, `~/.grok*` e `HABBLAUD_GROK_DIRS`; `HABBLAUD_GROK=0` desliga). `npm run grok:install` grava o hook
+  (`~/.grok/hooks/habblaud.json`, só do Habblaud) para ver cada passo na hora e a mão levantada nos pedidos de
+  permissão. Ainda sem aprovar pelo escritório, mensagens nem uso de 5 h/semanal (o Grok não os expõe). No Docker,
+  `npm run docker:up` monta só `sessions/` de cada pasta do Grok.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido
