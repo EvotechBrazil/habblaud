@@ -42,6 +42,9 @@
     "codex:uninstall": "tsx scripts/codex-install.ts uninstall",
     "codex:status": "tsx scripts/codex-install.ts status",
     "codex:bridge": "tsx scripts/codex-bridge.ts",
+    "grok:install": "tsx scripts/grok-install.ts install",
+    "grok:uninstall": "tsx scripts/grok-install.ts uninstall",
+    "grok:status": "tsx scripts/grok-install.ts status",
     "remote:setup": "tsx scripts/remote-setup.ts",
     "remote:mdns": "tsx scripts/remote-mdns.ts",
     "release": "tsx scripts/release.ts"
