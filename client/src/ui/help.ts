@@ -4,7 +4,7 @@ import type { HelpSection } from './context';
 import { h, iconButton, prefersReducedMotion } from './dom';
 import { ICONS } from './icons';
 import { SHELL_STAGES, STATUS_LABEL } from './model';
-import { CODEX_LIVE_HINT } from './provider';
+import { CODEX_LIVE_HINT, GROK_LIVE_HINT } from './provider';
 import { createUsageSetup, richText } from './usage';
 import { createAccountChip, updateAccountChip } from './widgets';
 import { tr } from '../../../shared/i18n';
@@ -68,6 +68,16 @@ const CODEX_HELP: string[] = [
   tr('Meu dia: o Codex conta tokens, mas não grava custo.'),
 ];
 
+/** O Grok no escritório: o que muda em relação ao Claude Code. */
+const GROK_HELP: string[] = [
+  tr('Cada projeto aberto no Grok vira uma sala: a mesma do Claude Code e do Codex naquela pasta, e todos dividem a sala.'),
+  tr('Os agentes do Grok têm o chip da conta vazado (só a borda na cor da conta) e o selo GROK na etiqueta e nos detalhes.'),
+  tr('{0} Sem os hooks, o escritório lê os arquivos de sessão do Grok (`~/.grok/sessions`): cada passo aparece quando o Grok o grava, e o escritório não sabe quando ele espera por você.', [GROK_LIVE_HINT]),
+  tr('Aprovar pelo escritório e mandar mensagens: ainda não existem para o Grok (ele aprova sozinho e não tem uma fila de mensagens). Responda no próprio Grok.'),
+  tr('Uso de 5 h e semanal: o Grok não grava esses números no computador; o cartão da conta fica sem barras.'),
+  tr('Meu dia: o Grok conta tokens, mas não grava custo.'),
+];
+
 /** O fim da espera (o servidor marca com uma atividade ✅ ou ❌). */
 const SHELL_END_HELP: [string, string][] = [
   ['🎉', tr('Terminou bem: levanta, comemora com confete e uma estrela.')],
@@ -75,7 +85,7 @@ const SHELL_END_HELP: [string, string][] = [
 ];
 
 const INTRO =
-  tr('Cada projeto aberto no Claude Code ou no Codex vira uma sala (os dois no mesmo projeto dividem a sala), e cada sessão aberta é um personagem com nome próprio. ') +
+  tr('Cada projeto aberto no Claude Code, no Codex ou no Grok vira uma sala (os três no mesmo projeto dividem a sala), e cada sessão aberta é um personagem com nome próprio. ') +
   tr('Subagentes chegam como colegas novos, trabalham na mesma sala e vão embora quando terminam. ') +
   tr('Quando a última sessão de uma sala é fechada, quem sai apaga a luz e a sala é desmontada.');
 
@@ -160,6 +170,7 @@ export class HelpDialog {
         ),
         this.usageSection(),
         this.codexSection(),
+        this.grokSection(),
       ),
     );
     // Clique no fundo (fora do conteúdo) fecha.
@@ -247,7 +258,7 @@ export class HelpDialog {
         'ul',
         { class: 'ui-help__list' },
         h('li', { text: tr('O chip colorido com a letra (C, D…) mostra de qual conta do Claude Code é cada agente: cada atalho de terminal usa uma pasta de configuração diferente.') }),
-        h('li', {}, accountSample('C', '#f08a3c'), tr(' Conta do Claude Code · '), accountSample('X', '#a77bf3', true), tr(' Conta do Codex (chip vazado, com o selo CODEX onde há espaço).')),
+        h('li', {}, accountSample('C', '#f08a3c'), tr(' Conta do Claude Code · '), accountSample('X', '#a77bf3', 'codex'), tr(' Conta do Codex · '), accountSample('G', '#5cc97b', 'grok'), tr(' Conta do Grok (chip vazado, com o selo CODEX ou GROK onde há espaço).')),
         h('li', {
           text: tr('No topo, cada conta mostra o uso da sessão de 5 horas e da semana. O ↻ indica quando cada limite reinicia (contagem regressiva se faltar menos de um dia). Verde abaixo de 50%, âmbar até 80% e vermelho a partir daí.'),
         }),
@@ -272,15 +283,27 @@ export class HelpDialog {
     return el;
   }
 
+  /** O Grok no escritório. */
+  private grokSection(): HTMLElement {
+    const el = h(
+      'section',
+      { class: 'ui-help__usage', attrs: { 'aria-labelledby': 'ui-help-grok' } },
+      h('h3', { text: 'Grok', tabIndex: -1, attrs: { id: 'ui-help-grok' } }),
+      h('ul', { class: 'ui-help__list' }, ...GROK_HELP.map((text) => h('li', {}, ...richText(text)))),
+    );
+    this.sections.set('grok', el);
+    return el;
+  }
+
   get isOpen(): boolean {
     return this.el.open;
   }
 }
 
 /** Um chip de conta de exemplo (legenda). */
-function accountSample(short: string, color: string, codex = false): HTMLElement {
+function accountSample(short: string, color: string, provider: 'codex' | 'grok' | undefined = undefined): HTMLElement {
   const chip = createAccountChip('sm');
-  updateAccountChip(chip, { id: short, short, name: codex ? 'Codex' : tr('Conta {0}', [short]), color, configDir: '', sessions: 0, usageStatus: 'disabled', ...(codex ? { provider: 'codex' as const } : {}) });
+  updateAccountChip(chip, { id: short, short, name: provider === 'codex' ? 'Codex' : provider === 'grok' ? 'Grok' : tr('Conta {0}', [short]), color, configDir: '', sessions: 0, usageStatus: 'disabled', ...(provider ? { provider } : {}) });
   chip.setAttribute('aria-hidden', 'true');
   return chip;
 }

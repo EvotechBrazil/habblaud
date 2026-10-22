@@ -339,9 +339,10 @@
     inset 0 2px 0 rgba(255, 255, 255, 0.35);
 }
 
-/* Conta do Codex: chip "vazado" (fundo escuro, borda e letra na cor da conta) com cantos em degrau, como um pixel
-   arredondado. Lê-se de longe como "outra ferramenta" sem precisar de logotipo. */
-.ui-acc-chip[data-provider='codex'] {
+/* Conta do Codex ou do Grok: chip "vazado" (fundo escuro, borda e letra na cor da conta) com cantos em degrau, como
+   um pixel arredondado. Lê-se de longe como "outra ferramenta" sem precisar de logotipo. */
+.ui-acc-chip[data-provider='codex'],
+.ui-acc-chip[data-provider='grok'] {
   --step: 2px;
   border-radius: 0;
   background: #161b26;
@@ -361,11 +362,12 @@
   );
 }
 
-.ui-acc-chip--lg[data-provider='codex'] {
+.ui-acc-chip--lg[data-provider='codex'],
+.ui-acc-chip--lg[data-provider='grok'] {
   --step: 3px;
 }
 
-/* Selo de texto "Codex" ao lado do nome da conta (fonte do sistema: na Pixelify o "C" parece "O"). */
+/* Selo de texto "Codex"/"Grok" ao lado do nome da conta (fonte do sistema: na Pixelify o "C" parece "O"). */
 .ui-prov {
   display: inline-flex;
   align-items: center;

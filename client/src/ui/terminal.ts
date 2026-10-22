@@ -7,7 +7,7 @@
 // Busca (Ctrl/⌘+F ou a lupa), filtro e o botão de copiar de cada entrada vêm de ui/termtools.ts.
 // O modelo (deduplicação, junção ferramenta -> resultado, limite de entradas, prévias recolhidas e rodapé) é puro e
 // testado em ui/terminal.test.ts; a montagem usa só textContent (o markdown das respostas vem de ui/markdown.ts).
-// Sessão do Codex: selo "Codex" no cabeçalho e um spinner neutro no rodapé (o ✻ é do Claude Code).
+// Sessão do Codex ou do Grok: selo "Codex"/"Grok" no cabeçalho e um spinner neutro no rodapé (o ✻ é do Claude Code).
 import type { AgentInfo, Provider, RecentSession, TerminalEntry, TerminalInit } from '../../../shared/types';
 import { MessageComposer } from './composer';
 import type { UiComponent, UiContext } from './context';
@@ -20,7 +20,7 @@ import { TermActions } from './termactions';
 import { TermTabs } from './termtabs';
 import { renderMarkdown } from './markdown';
 import { roleLabel, shellWaitIn } from './model';
-import { providerOf } from './provider';
+import { PROVIDER_NAME, providerOf } from './provider';
 import {
   clearHits,
   copyTextOf,
@@ -62,7 +62,7 @@ const STICK_PX = 32;
 const ES_CLOSED = 2;
 /** Quadros do spinner do Claude Code (vai e volta). */
 const SPINNER = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
-/** Codex: um spinner neutro (pontos girando), com o mesmo número de quadros. */
+/** Codex e Grok: um spinner neutro (pontos girando), com o mesmo número de quadros. */
 const CODEX_SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_MS = 120;
 /** "⏺" com seletor de variação de texto: nunca vira emoji colorido (a cor vem do CSS). */
@@ -337,12 +337,12 @@ export function entryTimeTitle(at: number, now: number): string {
 
 /** Quadros do spinner do rodapé de cada ferramenta. */
 export function spinnerFrames(provider: Provider): readonly string[] {
-  return provider === 'codex' ? CODEX_SPINNER : SPINNER;
+  return provider !== 'claude' ? CODEX_SPINNER : SPINNER;
 }
 
 /** Símbolo parado do rodapé (sem animação, ou fora do "trabalhando"). */
 export function footerGlyph(kind: TerminalFooterKind, provider: Provider): string {
-  if (kind === 'working') return provider === 'codex' ? '•' : '✻';
+  if (kind === 'working') return provider !== 'claude' ? '•' : '✻';
   return { waiting: '✋', shell: '⏳', idle: '○', ended: '■' }[kind];
 }
 
@@ -378,7 +378,9 @@ export function terminalFooter(agent: AgentInfo | undefined, agents: readonly Ag
       const hint =
         agent.provider === 'codex'
           ? tr('{0} · responda no Codex: este pedido não chegou ao Habblaud ou passou do tempo de espera', [text])
-          : tr('{0} · responda no Claude Code: este pedido não chegou ao Habblaud ou passou do tempo de espera', [text]);
+          : agent.provider === 'grok'
+            ? tr('{0} · responda no {1}', [text, PROVIDER_NAME.grok])
+            : tr('{0} · responda no Claude Code: este pedido não chegou ao Habblaud ou passou do tempo de espera', [text]);
       return { kind: 'waiting', text: hint, since: agent.statusSince };
     }
     default:

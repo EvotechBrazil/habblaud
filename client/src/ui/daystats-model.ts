@@ -13,7 +13,9 @@ import {
   type TimedStatus,
   type WaitDayStats,
 } from '../../../shared/daystats';
+import type { Provider } from '../../../shared/types';
 import { formatInt, formatTokens, formatUSD } from './format';
+import { recordsCost } from './provider';
 import { intlLocale, tr } from '../../../shared/i18n';
 
 /** Rótulos dos status no painel (o mesmo vocabulário do escritório, do ponto de vista de quem espera). */
@@ -89,38 +91,45 @@ export interface Highlights {
 }
 
 /**
- * `codex` = alguma conta do Codex trabalhou no dia: o custo é só o do Claude Code (o Codex não grava custo, só
- * tokens), e a dica diz isso.
+ * `noCost` = nomes das ferramentas que trabalharam no dia sem gravar custo (Codex, Grok): o custo é só o do Claude
+ * Code (as outras contam só tokens), e a dica diz isso.
  */
-export function highlights(stats: DayStats, clock: (t: number) => string, codex = false): Highlights {
+export function highlights(stats: DayStats, clock: (t: number) => string, noCost: readonly string[] = []): Highlights {
+  const codex = noCost.length > 0;
+  const tools = noCost.join(tr(' e o '));
+  const plural = noCost.length > 1;
   const t = stats.totals;
   const c = t.counts;
   const top = stats.waits[0];
-  const plural = (n: number, one: string, many: string) => `${formatInt(n)} ${n === 1 ? one : many}`;
+  const count = (n: number, one: string, many: string) => `${formatInt(n)} ${n === 1 ? one : many}`;
   return {
     waiting: formatAgentTime(t.ms.waiting),
     waitingMs: t.ms.waiting,
     longest: top ? tr('{0} · {1} em {2}, às {3}{4}', [formatAgentTime(top.ms), top.agentName, top.roomName, clock(top.start), top.ongoing ? tr(' (ainda esperando)') : '']) : '',
     wall: t.waitWallMs > 0 ? tr('Alguém esperou por você durante {0} do dia', [formatAgentTime(t.waitWallMs)]) : '',
-    waits: t.waits ? plural(t.waits, tr('espera'), tr('esperas')) : t.ms.waiting > 0 ? tr('só esperas de poucos segundos') : tr('nenhuma espera'),
+    waits: t.waits ? count(t.waits, tr('espera'), tr('esperas')) : t.ms.waiting > 0 ? tr('só esperas de poucos segundos') : tr('nenhuma espera'),
     working: formatAgentTime(t.ms.working),
     sessions: formatInt(t.sessions),
-    subagents: plural(t.subagents, tr('subagente'), tr('subagentes')),
+    subagents: count(t.subagents, tr('subagente'), tr('subagentes')),
     tokens: formatTokens(c.tokensIn + c.tokensOut),
     tokensDetail: tr('{0} entrada · {1} saída', [formatTokens(c.tokensIn), formatTokens(c.tokensOut)]),
     cost: c.costUSD > 0 ? formatUSD(c.costUSD) : '—',
     costHint:
       c.costUSD > 0
         ? codex
-          ? tr('Só do Claude Code: o Codex não grava custo, só tokens')
+          ? plural
+            ? tr('Só do Claude Code: o {0} não gravam custo, só tokens', [tools])
+            : tr('Só do Claude Code: o {0} não grava custo, só tokens', [tools])
           : tr('Custo calculado pelo próprio Claude Code')
         : c.tokensIn + c.tokensOut > 0
           ? codex
-            ? tr('O Codex não grava custo, só tokens')
+            ? plural
+              ? tr('O {0} não gravam custo, só tokens', [tools])
+              : tr('O {0} não grava custo, só tokens', [tools])
             : tr('Os transcripts não trouxeram o custo')
           : tr('Nenhum gasto registrado'),
     prompts: formatInt(c.prompts),
-    activity: `${plural(c.toolCalls, tr('ferramenta'), tr('ferramentas'))} · ${plural(c.tasksDone, tr('tarefa concluída'), tr('tarefas concluídas'))}`,
+    activity: `${count(c.toolCalls, tr('ferramenta'), tr('ferramentas'))} · ${count(c.tasksDone, tr('tarefa concluída'), tr('tarefas concluídas'))}`,
   };
 }
 
@@ -250,20 +259,24 @@ export interface AccountCard {
   waiting: string;
   sessions: string;
   tokens: string;
-  /** null = conta do Codex (ele não grava custo: o cartão mostra só os tokens). */
+  /** null = conta do Codex ou do Grok (não gravam custo: o cartão mostra só os tokens). */
   cost: string | null;
   /** Conta do Codex (chip vazado). */
   codex: boolean;
+  /** Ferramenta da conta (o chip vazado leva `data-provider`). */
+  provider: Provider;
 }
 
-/** `isCodex` diz quais contas são do Codex (o protocolo do dia não traz a ferramenta: vem do snapshot ou do id). */
-export function accountCards(accounts: readonly AccountDayStats[], isCodex: (id: string) => boolean = () => false): AccountCard[] {
+/** `providerOf` diz a ferramenta de cada conta (o protocolo do dia não a traz: vem do snapshot ou do id). */
+export function accountCards(accounts: readonly AccountDayStats[], providerOf: (id: string) => Provider = () => 'claude'): AccountCard[] {
   const work = accounts.reduce((n, a) => n + a.ms.working, 0);
   return accounts
     .filter((a) => totalMs(a.ms) > 0 || a.counts.tokensIn > 0)
     .map((a) => {
       const share = work > 0 ? Math.round((a.ms.working / work) * 100) : 0;
-      const codex = isCodex(a.id);
+      const provider = providerOf(a.id);
+      const codex = provider === 'codex';
+      const noCost = !recordsCost(provider);
       return {
         id: a.id,
         name: a.name,
@@ -275,8 +288,9 @@ export function accountCards(accounts: readonly AccountDayStats[], isCodex: (id:
         waiting: formatAgentTime(a.ms.waiting),
         sessions: `${formatInt(a.sessions)} ${a.sessions === 1 ? tr('sessão') : tr('sessões')}${a.subagents ? ` · ${formatInt(a.subagents)} sub` : ''}`,
         tokens: formatTokens(a.counts.tokensIn + a.counts.tokensOut),
-        cost: codex ? null : a.counts.costUSD > 0 ? formatUSD(a.counts.costUSD) : '—',
+        cost: noCost ? null : a.counts.costUSD > 0 ? formatUSD(a.counts.costUSD) : '—',
         codex,
+        provider,
       };
     });
 }

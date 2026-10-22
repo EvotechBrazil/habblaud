@@ -31,6 +31,9 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(accountProvider({}, '.codex')).toBe('claude');
     expect(accountProvider(undefined, '.claude', 'codex')).toBe('codex');
     expect(accountProvider(undefined, '.codex')).toBe('codex');
+    expect(accountProvider(undefined, '.grok')).toBe('grok');
+    expect(accountProvider(undefined, 'demo:.grok-casa')).toBe('grok');
+    expect(accountProvider({ provider: 'grok' }, '.claude')).toBe('grok');
     expect(accountProvider(undefined, 'x')).toBe('claude');
   });
 
@@ -38,6 +41,9 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(fallbackShort('.claude-conta2')).toBe('C');
     expect(fallbackShort('.claude')).toBe('?');
     expect(fallbackShort('.codex')).toBe('X');
+    expect(fallbackShort('.grok')).toBe('G');
+    expect(fallbackShort('.grok-casa')).toBe('C');
+    expect(fallbackShort('.grok~2')).toBe('G');
     expect(fallbackShort('.codex-trabalho')).toBe('T');
     expect(fallbackShort('.codex~2')).toBe('X');
     expect(fallbackShort('demo:.codex')).toBe('X');
@@ -49,6 +55,9 @@ describe('ferramenta (Claude Code ou Codex)', () => {
   it('selo "Codex": só no Codex, e sem repetir o nome da conta', () => {
     expect(showsProviderTag('codex', 'Conta X')).toBe(true);
     expect(showsProviderTag('codex', 'Codex')).toBe(false);
+    expect(showsProviderTag('grok', 'Conta G')).toBe(true);
+    expect(showsProviderTag('grok', 'Grok G')).toBe(false);
+    expect(showsProviderTag('claude', 'Conta C')).toBe(false);
     expect(showsProviderTag('codex', 'Demo Codex')).toBe(false);
     expect(showsProviderTag('claude', 'Conta C')).toBe(false);
   });
@@ -58,6 +67,9 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(accountChipLabel({ name: 'Conta X', plan: 'Team', provider: 'codex' }, '.codex', 'codex')).toBe('Conta X · Codex · plano Team');
     expect(accountChipLabel({ name: 'Codex', plan: 'Team', provider: 'codex' }, '.codex', 'codex')).toBe('Codex · plano Team');
     expect(accountChipLabel(undefined, '.codex', 'codex')).toBe('.codex · Codex');
+    expect(accountChipLabel({ name: 'Grok', provider: 'grok' }, '.grok', 'grok')).toBe('Grok');
+    expect(accountChipLabel({ name: 'Conta G', provider: 'grok' }, '.grok', 'grok')).toBe('Conta G · Grok');
+    expect(accountChipLabel(undefined, '.grok', 'grok')).toBe('.grok · Grok');
     expect(accountChipLabel(undefined, '', 'claude')).toBe('Conta desconhecida');
   });
 
