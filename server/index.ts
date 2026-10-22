@@ -37,6 +37,10 @@ import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
 import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
+import { discoverGrokDirs } from './sources/grok/accounts';
+import { GrokHistory } from './sources/grok/history';
+import type { GrokLive } from './sources/grok/live';
+import { GrokSource } from './sources/grok/source';
 import { createBuildReader, readBuildInfo } from './build';
 import { UpdateChecker } from './updates/checker';
 import { getLocale, tr } from '../shared/i18n';
@@ -141,6 +145,12 @@ if (codex) agents.add(codex);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
+// Depois do Codex, a do Grok (quando há pastas do Grok; HABBLAUD_GROK=0 desliga): mesmo contrato, com o registro
+// active_sessions.json (fora do Docker) e os hooks do Grok (POST /api/grok/events, GrokLive) ao vivo.
+const grokDirs = config.grok ? discoverGrokDirs(process.env, config.home) : [];
+const grok = grokDirs.length ? new GrokSource({ accounts, office, dirs: grokDirs, env: process.env, home: config.home, checkPid: !config.inDocker }) : undefined;
+if (grok) agents.add(grok);
+const grokLive: GrokLive | undefined = grok;
 late.office = office;
 late.agents = agents;
 // Página que pode responder pelo escritório: Host local na porta local; na remota, só com permissions liberado.
@@ -196,6 +206,7 @@ const history = config.terminal
   ? new HistorySet([new SessionHistory({ accounts: () => accounts.entries(), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) })])
   : undefined;
 if (history && codex) history.add(new CodexHistory({ accounts: () => accounts.entriesOf('codex'), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) }));
+if (history && grok) history.add(new GrokHistory({ accounts: () => accounts.entriesOf('grok'), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) }));
 // Entregas: o fim de cada pedido, lido dos transcripts do histórico (mesma trava do terminal). Os arquivos entregues
 // são lidos aqui (Node, ou pasta de conta montada no Docker) ou pelo auxiliar do host.
 const deliveries = history
@@ -372,6 +383,7 @@ const api = createApiHandler({
     return recentFolders(history ? await history.list().catch(() => []) : [], rooms);
   },
   codexLive,
+  grokLive,
   stats,
   updates,
   remote: config.remote ? { is: isRemoteRequest, allows: (f) => config.remote!.allow.has(f) } : undefined,
@@ -490,6 +502,14 @@ server.listen(config.port, config.host, () => {
     }
   } else {
     log.info(tr('   Codex: {0}.', [config.codex ? tr('nenhuma pasta do Codex encontrada (defina HABBLAUD_CODEX_DIRS)') : tr('desligado (HABBLAUD_CODEX=0)')]));
+  }
+  if (grok) {
+    const grokAccounts = grok.accountEntries();
+    const open = grok.sources().reduce((n, s) => n + s.sessions, 0);
+    log.info(tr('   Grok: {0} conta(s), {1} sessão(ões) aberta(s).', [grokAccounts.length, open]));
+    for (const a of grokAccounts) log.info(tr('   Conta {0} do Grok ({1}): {2}', [a.detected.short, a.id, a.detected.configDir]));
+  } else {
+    log.info(tr('   Grok: {0}.', [config.grok ? tr('nenhuma pasta do Grok encontrada (defina HABBLAUD_GROK_DIRS)') : tr('desligado (HABBLAUD_GROK=0)')]));
   }
   if (office.isDemo()) log.info(tr('   Modo demonstração ligado (agentes simulados misturados aos reais).'));
   if (config.terminal) log.info(tr('   Terminal: ligado (acesso só local).'));
