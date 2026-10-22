@@ -16,6 +16,12 @@
 //    sessions/, archived_sessions/ e thread-writer-locks/ de cada uma, somente leitura, em /codex/<conta>/... —
 //    nunca auth.json, config.toml, shell_snapshots/, history.jsonl, logs nem os SQLite. Vão em HABBLAUD_CODEX_DIRS
 //    e, com `provider: 'codex'` e a pasta do HOST (onde o `codex queue` roda), em HABBLAUD_ACCOUNTS.
+//    Contas do Grok (~/.grok*, GROK_HOME ou HABBLAUD_GROK_DIRS; HABBLAUD_GROK=0 desliga): SOMENTE sessions/ de cada
+//    uma, somente leitura, em /grok/<conta>/sessions — nunca auth.json, config.toml, a memória nem os logs. O
+//    active_sessions.json (as sessões abertas) fica de fora: o Grok o troca de inode a cada escrita e uma montagem de
+//    arquivo ficaria presa na cópia antiga; no container, sessão aberta = updates.jsonl modificado nos últimos 30 min
+//    ou os hooks do Grok (npm run grok:install). Vão em HABBLAUD_GROK_DIRS e, com `provider: 'grok'`, em
+//    HABBLAUD_ACCOUNTS.
 // 3. Migra o que sobrou do nome antigo (CodeTown, até a 0.3.2): ~/.codetown vira ~/.habblaud, o container
 //    `codetown` e a rede codetown_default saem e, se o volume novo ainda não existe, os dados de
 //    codetown_codetown-data são copiados para ele (o antigo fica, para apagar à mão). Avisa de CODETOWN_*
@@ -40,6 +46,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AccountInfo, SourceInfo } from '../shared/types';
 import { codexDirsRefused, detectAccounts, discoverClaudeDirs, type DetectedAccount } from '../server/accounts/detect';
 import { detectCodexAccounts, discoverCodexDirs } from '../server/sources/codex/accounts';
+import { detectGrokAccounts, discoverGrokDirs } from '../server/sources/grok/accounts';
 import { describeStateMigration, LEGACY_NAME, legacyEnvWarning, migrateLegacyStateDir } from '../server/legacy';
 import { makeClaudeRunner, MIN_CLAUDE_VERSION, readPackageVersion, updateInstalledMods, type ModUpdateResult } from './mod-install';
 import { tr } from '../shared/i18n';
@@ -71,6 +78,10 @@ const CODEX_CONTAINER_ROOT = '/codex';
  * auth.json, config.toml, shell_snapshots/, history.jsonl, logs e os SQLite ficam no host.
  */
 export const CODEX_MOUNTED_SUBDIRS = ['sessions', 'archived_sessions', 'thread-writer-locks'] as const;
+/** Raiz das montagens do Grok dentro do container: /grok/<conta>/sessions. */
+const GROK_CONTAINER_ROOT = '/grok';
+/** Somente sessions/ de cada pasta do Grok entra no container (as conversas); auth.json, config.toml, memória e logs ficam no host. */
+export const GROK_MOUNTED_SUBDIRS = ['sessions'] as const;
 const DEFAULT_PORT = 4747;
 const HEALTH_TIMEOUT_MS = 120_000;
 /** Imagem e volume de dados como o Compose os nomeia (`name: habblaud` no docker-compose.yml). */
@@ -84,7 +95,7 @@ const LEGACY_DOCKER = {
   image: `${LEGACY_NAME}:local`,
 } as const;
 
-const USAGE = tr('Uso: npm run docker:up [-- opções]\n\nOpções:\n  --no-build   sobe sem reconstruir a imagem\n  --down       derruba o container (o mesmo que npm run docker:down)\n  -h, --help   mostra esta ajuda\n\nVariáveis: HABBLAUD_PORT (porta no host, padrão {0}), HABBLAUD_CLAUDE_DIRS\n(config dirs separados por vírgula, se as contas não estiverem em ~/.claude*), HABBLAUD_CODEX_DIRS\n(pastas do Codex, se não estiverem em ~/.codex* nem em CODEX_HOME) e HABBLAUD_CODEX=0 (sem o Codex).', [DEFAULT_PORT]);
+const USAGE = tr('Uso: npm run docker:up [-- opções]\n\nOpções:\n  --no-build   sobe sem reconstruir a imagem\n  --down       derruba o container (o mesmo que npm run docker:down)\n  -h, --help   mostra esta ajuda\n\nVariáveis: HABBLAUD_PORT (porta no host, padrão {0}), HABBLAUD_CLAUDE_DIRS\n(config dirs separados por vírgula, se as contas não estiverem em ~/.claude*), HABBLAUD_CODEX_DIRS\n(pastas do Codex, se não estiverem em ~/.codex* nem em CODEX_HOME), HABBLAUD_CODEX=0 (sem o Codex),\nHABBLAUD_GROK_DIRS (pastas do Grok, se não estiverem em ~/.grok* nem em GROK_HOME) e HABBLAUD_GROK=0 (sem o Grok).', [DEFAULT_PORT]);
 
 // ---------------------------------------------------------------------------------------------
 // Saída no terminal
@@ -166,8 +177,8 @@ type CachedUsage = { fetchedAtMs: unknown; utilization: Partial<Record<(typeof U
 
 export interface AccountPayload {
   id: string;
-  /** Só nas contas do Codex (ausente = Claude Code). */
-  provider?: 'codex';
+  /** Só nas contas do Codex e do Grok (ausente = Claude Code). */
+  provider?: 'codex' | 'grok';
   configDir: string;
   mountDir: string;
   short: string;
@@ -244,6 +255,36 @@ export function codexDisabled(env: NodeJS.ProcessEnv): boolean {
   return !!v && !/^(1|true|yes|sim|on)$/i.test(v);
 }
 
+/** HABBLAUD_GROK desligado (0, false, off, no) no ambiente de quem roda o docker:up. */
+export function grokDisabled(env: NodeJS.ProcessEnv): boolean {
+  const v = env.HABBLAUD_GROK?.trim();
+  return !!v && !/^(1|true|yes|sim|on)$/i.test(v);
+}
+
+/**
+ * Monta só sessions/ de cada pasta do Grok (as que existirem), em /grok/<id>. `accounts` vem de detectGrokAccounts(dirs),
+ * na mesma ordem de `dirs`; o id vira o nome da pasta no container, então o servidor lá dentro deriva o mesmo id.
+ */
+export function planGrokMounts(dirs: string[], accounts: DetectedAccount[], resolveDir: (p: string) => string | undefined = realDir): AccountMount[] {
+  const out: AccountMount[] = [];
+  dirs.forEach((hostDir, i) => {
+    const account = accounts[i];
+    const mountDir = posix.join(GROK_CONTAINER_ROOT, account.id);
+    const binds: BindMount[] = [];
+    for (const sub of GROK_MOUNTED_SUBDIRS) {
+      const source = resolveDir(join(hostDir, sub));
+      if (source) binds.push({ source, target: posix.join(mountDir, sub) });
+    }
+    if (binds.length) out.push({ account, hostDir, mountDir, binds });
+  });
+  return out;
+}
+
+/** Metadados das contas do Grok para HABBLAUD_ACCOUNTS: `provider: 'grok'` e a pasta do HOST em `configDir`. */
+export function grokAccountsPayload(mounts: AccountMount[]): AccountPayload[] {
+  return mounts.map(({ account: a, hostDir, mountDir }) => ({ id: a.id, provider: 'grok', configDir: hostDir, mountDir, short: a.short, name: a.name, color: a.color }));
+}
+
 /**
  * Do cache de uso do Claude Code (`cachedUsageUtilization`) só seguem a data da coleta e, de
  * cada janela exibida, o percentual e o horário de reinício. Identificadores da conta, gastos e
@@ -316,12 +357,14 @@ export function renderOverride(
   codex: AccountMount[] = [],
   remoteTlsDir?: string,
   extraPorts: string[] = [],
+  grok: AccountMount[] = [],
 ): string {
   const env: Array<[string, string]> = [
     ['HABBLAUD_CLAUDE_DIRS', mounts.map((m) => m.mountDir).join(',')],
-    ['HABBLAUD_ACCOUNTS', JSON.stringify([...accountsPayload(mounts), ...codexAccountsPayload(codex)])],
+    ['HABBLAUD_ACCOUNTS', JSON.stringify([...accountsPayload(mounts), ...codexAccountsPayload(codex), ...grokAccountsPayload(grok)])],
   ];
   if (codex.length) env.push(['HABBLAUD_CODEX_DIRS', codex.map((m) => m.mountDir).join(',')]);
+  if (grok.length) env.push(['HABBLAUD_GROK_DIRS', grok.map((m) => m.mountDir).join(',')]);
   if (usageDir) env.push(['HABBLAUD_USAGE_DIR', CONTAINER_USAGE_DIR]);
   if (timeZone) env.push(['TZ', timeZone]);
   const lines = [
@@ -329,6 +372,7 @@ export function renderOverride(
     '# Contém caminhos do host e e-mails das contas: fica fora do git e com permissão 600.',
     '# Montagens: SOMENTE <conta>/projects, <conta>/sessions e a pasta do uso do statusline, todas somente leitura.',
     ...(codex.length ? ['# Codex: SOMENTE <pasta>/sessions, <pasta>/archived_sessions e <pasta>/thread-writer-locks, somente leitura.'] : []),
+    ...(grok.length ? ['# Grok: SOMENTE <pasta>/sessions, somente leitura (o registro das sessões abertas fica no host).'] : []),
     'services:',
     `  ${SERVICE}:`,
     '    environment:',
@@ -336,7 +380,7 @@ export function renderOverride(
   ];
   // O Compose junta estas portas às do docker-compose.yml.
   if (extraPorts.length) lines.push('    ports:', ...extraPorts.map((p) => `      - ${yamlString(p)}`));
-  const binds = [...mounts, ...codex].flatMap((m) => m.binds);
+  const binds = [...mounts, ...codex, ...grok].flatMap((m) => m.binds);
   if (usageDir) binds.push({ source: usageDir, target: CONTAINER_USAGE_DIR });
   // Acesso remoto: SÓ a pasta do certificado do servidor (a chave da CA fica no host).
   if (remoteTlsDir) binds.push({ source: remoteTlsDir, target: CONTAINER_REMOTE_TLS_DIR });
@@ -707,13 +751,26 @@ async function up(opts: Options, port: number): Promise<void> {
     }
   }
 
+  // Contas do Grok (só sessions/ entra; o registro das sessões abertas fica no host: ver o cabeçalho).
+  const grokDirs = grokDisabled(process.env) ? [] : discoverGrokDirs(process.env, HOME);
+  const grokAccounts = detectGrokAccounts(grokDirs, {
+    home: HOME,
+    env: process.env,
+    taken: { shorts: [...accounts, ...codexAccounts].map((a) => a.short), colors: [...accounts, ...codexAccounts].map((a) => a.color) },
+  });
+  const grokMounts = planGrokMounts(grokDirs, grokAccounts);
+  for (const m of grokMounts) {
+    say(tr('Grok {0} ({1}): monta sessions de {2}, somente leitura.', [m.account.short, m.account.id, tildify(m.hostDir)]));
+  }
+  if (grokMounts.length) say(tr('  No container, sessão aberta do Grok = conversa modificada nos últimos 30 min ou os hooks do Grok (npm run grok:install).'));
+
   migrateStateDir();
   const usageDir = ensureUsageDir();
   if (usageDir) say(tr('Uso ao vivo (mod ou tap de statusline): monta {0} em {1}, somente leitura.', [tildify(USAGE_DIR), CONTAINER_USAGE_DIR]));
   const remoteTlsDir = prepareRemoteTls();
   const remotePorts = remoteTlsDir || remoteInsecure() ? remotePortsToPublish() : [];
   const tmp = `${OVERRIDE_FILE}.tmp`;
-  writeFileSync(tmp, renderOverride(mounts, new Date(), usageDir, hostTimeZone(), codexMounts, remoteTlsDir, remotePorts), { mode: 0o600 });
+  writeFileSync(tmp, renderOverride(mounts, new Date(), usageDir, hostTimeZone(), codexMounts, remoteTlsDir, remotePorts, grokMounts), { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, OVERRIDE_FILE);
   say(tr('docker-compose.override.yml gerado.'));
@@ -740,6 +797,12 @@ async function up(opts: Options, port: number): Promise<void> {
     const usage = health.accounts?.find((a) => a.id === m.account.id)?.usageStatus;
     const state = src.ok ? plural(src.sessions, tr('sessão aberta'), tr('sessões abertas')) : tr('erro ao ler ({0})', [src.error ?? tr('desconhecido')]);
     say(`  Codex ${m.account.short} (${m.account.id}): ${state}${usage ? ` · ${USAGE_STATUS[usage]}` : ''}`);
+  }
+  for (const m of grokMounts) {
+    const src = health.sources?.find((s) => s.label === m.account.id && s.provider === 'grok');
+    if (!src) continue;
+    const state = src.ok ? plural(src.sessions, tr('sessão aberta'), tr('sessões abertas')) : tr('erro ao ler ({0})', [src.error ?? tr('desconhecido')]);
+    say(`  Grok ${m.account.short} (${m.account.id}): ${state}`);
   }
   for (const line of modHint(updateMods(dirs, accounts))) say(line);
   // Com a cópia falha, os dados só existem no volume antigo: nada de sugerir apagá-lo.
