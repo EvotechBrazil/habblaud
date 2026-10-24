@@ -74,7 +74,7 @@ const GROK_HELP: string[] = [
   tr('Os agentes do Grok têm o chip da conta vazado (só a borda na cor da conta) e o selo GROK na etiqueta e nos detalhes.'),
   tr('{0} Sem os hooks, o escritório lê os arquivos de sessão do Grok (`~/.grok/sessions`): cada passo aparece quando o Grok o grava, e o escritório não sabe quando ele espera por você.', [GROK_LIVE_HINT]),
   tr('Aprovar pelo escritório e mandar mensagens: ainda não existem para o Grok (ele aprova sozinho e não tem uma fila de mensagens). Responda no próprio Grok.'),
-  tr('Uso de 5 h e semanal: o Grok não grava esses números no computador; o cartão da conta fica sem barras.'),
+  tr('Uso: só a cota semanal (o plano do Grok não tem sessão de 5 h), lida do log do próprio Grok (`~/.grok/logs/unified.jsonl`) sem instalar nada, e só renovada enquanto alguma sessão roda (por isso o cartão mostra a idade). Com o Habblaud no Docker, é o `npm run bridge` que leva o número ao container.'),
   tr('Meu dia: o Grok conta tokens, mas não grava custo.'),
 ];
 

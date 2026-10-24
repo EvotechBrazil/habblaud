@@ -7,6 +7,8 @@
 // Conta do Codex: os números vêm dos arquivos de sessão dele, que só se renovam enquanto alguma sessão roda; por isso
 // a idade ("há 12 min") fica sempre à mostra. Sem cota nem créditos ("sem cota") nunca vira 0%. Não há o que
 // instalar para o uso: "Como funciona" abre a ajuda na seção do Codex. Sem Opus/Sonnet nem e-mail (só o plano).
+// Conta do Grok: só a cota semanal (o plano dele não tem sessão de 5 h), lida do log do Grok, que também só se renova
+// enquanto alguma sessão roda: a barra de 5 h fica escondida e a idade à mostra, como no Codex.
 import type { AccountInfo } from '../../../shared/types';
 import type { UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
@@ -21,6 +23,7 @@ export const SOURCE_LABEL: Record<NonNullable<AccountInfo['usage']>['source'], s
   cache: tr('cache do /usage do Claude Code'),
   statusline: tr('ao vivo (statusline do Claude Code)'),
   codex: tr('arquivos do Codex'),
+  grok: tr('log de cobrança do Grok'),
 };
 
 /** Origem para mostrar: o arquivo ao vivo pode ter sido gravado pelo mod do Habblaud ou pelo tap. */
@@ -167,11 +170,11 @@ export function cardState(a: Pick<AccountInfo, 'usage' | 'usageStatus'>): CardSt
   return a.usageStatus === 'ok' ? 'ok' : 'stale';
 }
 
-/** A idade dos números fica sempre à mostra? (Codex: só se renovam enquanto alguma sessão roda.) */
+/** A idade dos números fica sempre à mostra? (Codex e Grok: só se renovam enquanto alguma sessão roda.) */
 export function showsUsageAge(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>): boolean {
   if (!a.usage) return false;
   const state = cardState(a);
-  return state === 'stale' || (isCodex(a) && state !== 'empty');
+  return state === 'stale' || ((isCodex(a) || isGrok(a)) && state !== 'empty');
 }
 
 /** Linha embaixo do nome: e-mail; no Codex (sem e-mail), o plano; no Grok, "Grok"; nas outras, a pasta. */
@@ -186,13 +189,17 @@ export function usageSubtitle(a: Pick<AccountInfo, 'email' | 'plan' | 'configDir
 export function usageMessage(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>): [string, string] {
   const state = cardState(a);
   if (state === 'noquota') return [tr('sem cota'), tr('sem cota')];
-  if (isCodex(a)) return [tr('sem dados ainda'), tr('sem dados')];
-  if (isGrok(a)) return [tr('uso não disponível'), tr('sem uso')];
+  if (isCodex(a) || isGrok(a)) return [tr('sem dados ainda'), tr('sem dados')];
   return [tr('sem dados de uso'), tr('sem dados')];
 }
 
-/** Explicação do cartão de uma conta do Grok: ele não expõe o uso localmente. */
-export const GROK_USAGE_NOTE = tr('O Grok não grava o uso de 5 h e semanal no computador: o cartão fica sem barras. O Meu dia conta os tokens das sessões dele.');
+/** Explicação do cartão de uma conta do Grok (dica): só a cota semanal, lida do log dele; '' nas outras. */
+export function grokUsageNote(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>, now: number): string {
+  if (!isGrok(a)) return '';
+  const u = a.usage;
+  if (cardState(a) === 'empty' || !u) return tr('Não precisa instalar nada: a cota semanal vem do log do Grok e chega com a próxima sessão dele (no Docker, pelo `npm run bridge`).');
+  return tr('O Grok só tem a cota semanal (o plano dele não tem sessão de 5 h) e só a registra enquanto alguma sessão roda: este número é da última leitura ({0}).', [relativeTime(u.fetchedAt, now)]);
+}
 
 /** Explicação do cartão de uma conta do Codex (dica); '' nas outras. */
 export function codexUsageNote(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>, now: number): string {
@@ -293,7 +300,7 @@ export class UsageCards {
         class: 'ui-usage-card__how',
         type: 'button',
         title: tr('Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)'),
-        on: { click: () => this.ctx.openHelp(howBtn.dataset.help === 'codex' ? 'codex' : 'usage') },
+        on: { click: () => this.ctx.openHelp(howBtn.dataset.help === 'codex' ? 'codex' : howBtn.dataset.help === 'grok' ? 'grok' : 'usage') },
       },
       howLong,
       howShort,
@@ -357,8 +364,10 @@ export class UsageCards {
     const week = usage ? usageWindowView(usage.sevenDay, usage.fetchedAt, now, WEEK_MS) : null;
     const showMeters = hasWindows(a);
     setHidden(r.meters, !showMeters);
+    // Grok: só a semana (o plano dele não tem sessão de 5 h).
+    setHidden(r.five.el, grok);
     if (usage && showMeters) {
-      updateMeter(r.five, five, tr('Sessão de 5 horas'));
+      if (!grok) updateMeter(r.five, five, tr('Sessão de 5 horas'));
       updateMeter(r.week, week, tr('Semana'));
     }
     r.meters.classList.toggle('is-dim', state !== 'ok');
@@ -377,7 +386,9 @@ export class UsageCards {
         r.state,
         codex
           ? tr('Atualizado {0}: o Codex só grava o uso enquanto alguma sessão roda.', [age])
-          : tr('Números de {0}: podem não refletir o uso atual.', [age]),
+          : grok
+            ? tr('Atualizado {0}: o Grok só registra a cota semanal enquanto alguma sessão roda.', [age])
+            : tr('Números de {0}: podem não refletir o uso atual.', [age]),
       );
     }
 
@@ -387,14 +398,21 @@ export class UsageCards {
     setText(r.msgLong, msgLong);
     setText(r.msgShort, msgShort);
     setHidden(r.msg, state !== 'empty' && state !== 'noquota');
-    // Grok: nada a instalar nem a saber: o uso não existe localmente (a dica explica).
-    setHidden(r.how, state === 'noquota' || grok);
+    // Codex e Grok: nada a instalar; "Como funciona" abre a ajuda na seção da ferramenta.
+    setHidden(r.how, state === 'noquota');
     r.msg.classList.toggle('is-noquota', state === 'noquota');
-    setTitle(r.msg, state === 'noquota' ? codexUsageNote(a, now) : grok ? GROK_USAGE_NOTE : '');
-    setText(r.howLong, codex ? tr('Como funciona') : tr('Como ativar'));
-    setText(r.howShort, codex ? tr('Saber') : tr('Ativar'));
-    r.how.dataset.help = codex ? 'codex' : 'usage';
-    setTitle(r.how, codex ? tr('Como o uso do Codex chega ao Habblaud (abre a ajuda em “Codex”)') : tr('Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)'));
+    setTitle(r.msg, state === 'noquota' ? codexUsageNote(a, now) : grok ? grokUsageNote(a, now) : '');
+    setText(r.howLong, codex || grok ? tr('Como funciona') : tr('Como ativar'));
+    setText(r.howShort, codex || grok ? tr('Saber') : tr('Ativar'));
+    r.how.dataset.help = codex ? 'codex' : grok ? 'grok' : 'usage';
+    setTitle(
+      r.how,
+      codex
+        ? tr('Como o uso do Codex chega ao Habblaud (abre a ajuda em “Codex”)')
+        : grok
+          ? tr('Como a cota do Grok chega ao Habblaud (abre a ajuda em “Grok”)')
+          : tr('Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)'),
+    );
     this.updateTip(r, a, state, five, week, now);
   }
 
@@ -412,7 +430,8 @@ export class UsageCards {
     rows.push([tr('Sessões abertas'), String(a.sessions)]);
     const u = a.usage;
     if (u && (u.fiveHour || u.sevenDay)) {
-      rows.push([tr('Sessão de 5 h'), five?.summary ?? '—']);
+      // Grok: só a semana (o plano dele não tem sessão de 5 h).
+      if (!grok) rows.push([tr('Sessão de 5 h'), five?.summary ?? '—']);
       rows.push([tr('Semana'), week?.summary ?? '—']);
       // Opus e Sonnet são janelas do Claude: no Codex não existem.
       const opus = codex ? null : usageWindowView(u.sevenDayOpus, u.fetchedAt, now, WEEK_MS);
@@ -421,16 +440,17 @@ export class UsageCards {
       if (sonnet) rows.push([tr('Sonnet (semana)'), sonnet.summary]);
     }
     if (u && state === 'noquota') rows.push([tr('Cota'), tr('sem cota nem créditos agora')]);
-    if (u && (state !== 'empty' || codex)) {
+    if (u && (state !== 'empty' || codex || grok)) {
       rows.push([tr('Origem'), sourceLabel(u)]);
       rows.push([tr('Atualizado'), relativeTime(u.fetchedAt, now)]);
     }
     syncRows(r.tipRows, rows);
 
-    // Grok: sem uso local, sem passo a passo.
+    // Grok: a explicação dele (só a semana, lida do log), sem o passo a passo do Claude Code.
     if (grok) {
-      setText(r.tipNote, GROK_USAGE_NOTE);
-      setHidden(r.tipNote, false);
+      const note = grokUsageNote(a, now);
+      setText(r.tipNote, note);
+      setHidden(r.tipNote, !note);
       setHidden(r.tipSetup, true);
       return;
     }
