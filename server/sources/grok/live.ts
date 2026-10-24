@@ -1,6 +1,7 @@
 // Eventos dos hooks do Grok (a parte "ao vivo" da fonte do Grok): o script de hook (mod/habblaud-grok/hook.mjs)
 // manda o stdin do evento para POST /api/grok/events e a rota repassa aqui. A fonte do Grok (sources/grok/source.ts)
 // implementa.
+import type { ActiveSession } from './files';
 
 export interface GrokLive {
   /**
@@ -10,4 +11,10 @@ export interface GrokLive {
    * Devolve false para evento desconhecido ou sessão que não casa com nenhuma conta do Grok.
    */
   applyHookEvent(account: string | undefined, input: Record<string, unknown>): boolean;
+  /**
+   * Registro das sessões abertas de uma conta vindo do auxiliar do host (POST /api/grok/registry, scripts/codex-bridge.ts):
+   * o active_sessions.json do host, já só com os processos vivos. Vale no Docker, onde o arquivo não chega ao container;
+   * fora dele o arquivo lido aqui manda. Devolve false para conta que não casa com nenhuma do Grok.
+   */
+  applyRegistry(account: string | undefined, sessions: readonly ActiveSession[]): boolean;
 }

@@ -6,11 +6,16 @@
 // Docker, conexão pelo loopback) é conferida em http/app.ts. O guard (http/guard.ts) já exigiu JSON.
 //
 //   POST /api/grok/events   (hook)   {account?, grokHome?, event: <stdin do hook, textos cortados>}: 200 {ok}
+//   POST /api/grok/registry (auxiliar do host, scripts/codex-bridge.ts) {registries: [{account?, grokHome?,
+//                           sessions: [<entradas do active_sessions.json com o processo vivo>]}]}: 200 {ok, applied}
+// O registro só faz sentido no Docker (o container não vê o active_sessions.json do host): a fonte guarda a lista por
+// pouco tempo (BRIDGE_REGISTRY_TTL_MS) e, se o auxiliar parar de mandar, volta a decidir pelos arquivos e hooks.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAbsolute, resolve } from 'node:path';
 import type { AccountEntry } from '../accounts/service';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { errMsg, log } from '../log';
+import { parseActiveSessionList, type ActiveSession } from '../sources/grok/files';
 import type { GrokLive } from '../sources/grok/live';
 import { tr } from '../../shared/i18n';
 
@@ -23,6 +28,17 @@ export interface GrokHookEvent {
   grokHome?: string;
   /** O stdin do hook (hook_event_name, session_id...). */
   event: Rec;
+}
+
+/** Limites do corpo de POST /api/grok/registry (contas do Grok e sessões abertas por conta). */
+export const REGISTRY_MAX_ACCOUNTS = 16;
+export const REGISTRY_MAX_SESSIONS = 500;
+
+export interface GrokRegistryPost {
+  account?: string;
+  grokHome?: string;
+  /** Sessões abertas (válidas) daquela pasta do Grok. */
+  sessions: ActiveSession[];
 }
 
 function rec(v: unknown): Rec | undefined {
@@ -43,6 +59,27 @@ export function parseGrokEvent(raw: unknown): GrokHookEvent {
   const grokHome = shortStr(r.grokHome, 4_096);
   if (account) out.account = account;
   if (grokHome) out.grokHome = grokHome;
+  return out;
+}
+
+/**
+ * Corpo de POST /api/grok/registry: `{registries: [{account?, grokHome?, sessions: [...]}]}`. Sem a lista (ou
+ * grande demais): 400. Entradas de sessão inválidas ficam de fora (parseActiveSessionList).
+ */
+export function parseGrokRegistry(raw: unknown): GrokRegistryPost[] {
+  const list = rec(raw)?.registries;
+  if (!Array.isArray(list) || list.length > REGISTRY_MAX_ACCOUNTS) throw new HttpError(400, 'esperado {registries: [{account?, grokHome?, sessions: [...]}]}');
+  const out: GrokRegistryPost[] = [];
+  for (const item of list) {
+    const r = rec(item);
+    if (!r || !Array.isArray(r.sessions) || r.sessions.length > REGISTRY_MAX_SESSIONS) throw new HttpError(400, 'esperado {registries: [{account?, grokHome?, sessions: [...]}]}');
+    const entry: GrokRegistryPost = { sessions: parseActiveSessionList(r.sessions) };
+    const account = shortStr(r.account, 200);
+    const grokHome = shortStr(r.grokHome, 4_096);
+    if (account) entry.account = account;
+    if (grokHome) entry.grokHome = grokHome;
+    out.push(entry);
+  }
   return out;
 }
 
@@ -75,4 +112,27 @@ export async function handleGrokEvent(
     }
   }
   sendJson(res, 200, { ok });
+}
+
+/**
+ * Trata POST /api/grok/registry (método e Host já conferidos): cada lista vai à conta da pasta GROK_HOME (ou à que o
+ * auxiliar nomeou). `applied` = quantas contas aceitaram; `ok` = todas (false sem a fonte do Grok).
+ */
+export async function handleGrokRegistry(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: { live?: GrokLive; entries: () => readonly AccountEntry[] },
+): Promise<void> {
+  const body = parseGrokRegistry(await readJson(req, 1024 * 1024));
+  let applied = 0;
+  if (deps.live) {
+    for (const r of body) {
+      try {
+        if (deps.live.applyRegistry(grokAccountOf(deps.entries(), r.account, r.grokHome), r.sessions)) applied++;
+      } catch (err) {
+        log.warnOnce(`grok-registry:${errMsg(err)}`, tr('Registro do Grok: falha ao aplicar a lista do auxiliar ({0}).', [errMsg(err)]));
+      }
+    }
+  }
+  sendJson(res, 200, { ok: !!deps.live && applied === body.length, applied });
 }

@@ -7,7 +7,7 @@ import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { FIXTURE_CWD, FIXTURE_IDS, G, grokHome, sessionId } from '../../test/grok-fixtures';
-import { FALLBACK_RECENT_MS, GrokSource, HOOK_PRESENCE_MS, SESSION_END_GRACE_MS, STALE_HOOK_MS, WORKING_QUIET_MS } from './source';
+import { BRIDGE_REGISTRY_TTL_MS, FALLBACK_RECENT_MS, GrokSource, HOOK_PRESENCE_MS, SESSION_END_GRACE_MS, STALE_HOOK_MS, WORKING_QUIET_MS } from './source';
 
 setQuiet(true);
 
@@ -230,6 +230,69 @@ describe('fonte do Grok: sem o registro (Docker)', () => {
     quiet.advance(2_000);
     quiet.poll();
     expect(quiet.agent()?.status).toBe('offline');
+  });
+});
+
+describe('fonte do Grok: registro mandado pelo auxiliar do host (Docker)', () => {
+  it('a lista do auxiliar vale como registro: sessão TUI parada há horas fica no escritório e sai quando some da lista', () => {
+    const ctx = setup({ checkPid: false });
+    ctx.home.noActive();
+    const t0 = ctx.now();
+    const quietFor = 20 * 3600_000; // fora dos 30 min do modo "recente" e das 12 h de uma sessão aberta por hook
+    ctx.home.session(S, [G.user(S, 'a', { at: t0 - quietFor }), G.turnCompleted(S, { at: t0 - quietFor + 1_000, input: 10, output: 5 })], { mtime: t0 - quietFor });
+    ctx.source.boot();
+    expect(ctx.agent()).toBeUndefined();
+    expect(ctx.source.applyRegistry('.grok', [{ sessionId: S, pid: 4242, pidStart: 1, cwd: FIXTURE_CWD, openedAt: t0 - quietFor - 60_000 }])).toBe(true);
+    ctx.poll();
+    expect(ctx.agent()).toMatchObject({ provider: 'grok', roomId: FIXTURE_CWD, status: 'idle' });
+    expect(ctx.source.sources()[0]).toMatchObject({ sessions: 1, ok: true });
+    // Horas depois, o auxiliar segue mandando a mesma lista: continua (nenhum arquivo mudou).
+    ctx.advance(3 * 3600_000);
+    ctx.source.applyRegistry(ctx.home.dir, [{ sessionId: S, pid: 4242, cwd: FIXTURE_CWD }]);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    // O processo fechou: a lista vem sem ela e o agente sai depois da folga.
+    ctx.source.applyRegistry('.grok', []);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('idle');
+    ctx.advance(2_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).toBe('offline');
+  });
+
+  it('auxiliar parado: a lista expira e a presença volta ao modo sem registro (recente fica, antiga sai)', () => {
+    const ctx = setup({ checkPid: false });
+    ctx.home.noActive();
+    const t0 = ctx.now();
+    const old = sessionId(2);
+    ctx.home.session(S, [G.user(S, 'a', { at: t0 - 5_000 })], { mtime: t0 - 5_000 });
+    ctx.home.session(old, [G.user(old, 'b', { at: t0 - 20 * 3600_000 })], { mtime: t0 - 20 * 3600_000 });
+    ctx.source.applyRegistry('.grok', [
+      { sessionId: S, pid: 1, cwd: FIXTURE_CWD },
+      { sessionId: old, pid: 2, cwd: FIXTURE_CWD },
+    ]);
+    ctx.source.boot();
+    expect(ctx.agents().map((a) => a.sessionId).sort()).toEqual([S, old].sort());
+    ctx.advance(BRIDGE_REGISTRY_TTL_MS + 1_000);
+    ctx.poll();
+    ctx.advance(2_000);
+    ctx.poll();
+    expect(ctx.agent()?.status).not.toBe('offline');
+    expect(ctx.agent(`.grok:${old}`)?.status).toBe('offline');
+  });
+
+  it('o active_sessions.json lido aqui manda sobre a lista do auxiliar; conta desconhecida ou ausente é recusada', () => {
+    const ctx = setup();
+    ctx.home.session(S, [G.user(S, 'a', { at: ctx.now() })]);
+    ctx.home.active([]);
+    expect(ctx.source.applyRegistry('.grok', [{ sessionId: S, pid: 1, cwd: FIXTURE_CWD }])).toBe(true);
+    ctx.source.boot();
+    expect(ctx.agent()).toBeUndefined();
+    expect(ctx.source.applyRegistry(undefined, [{ sessionId: S, pid: 1, cwd: FIXTURE_CWD }])).toBe(false);
+    expect(ctx.source.applyRegistry('.grok-outra', [])).toBe(false);
+    expect(ctx.source.applyRegistry('/pasta/que/nao/existe/.grok', [])).toBe(false);
+    ctx.poll();
+    expect(ctx.agent()).toBeUndefined();
   });
 });
 

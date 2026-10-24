@@ -39,6 +39,9 @@ class FakeLive {
     this.calls.push({ account, input });
     return true;
   }
+  applyRegistry(): boolean {
+    return false;
+  }
 }
 
 let tmp: ReturnType<typeof tempDir>;

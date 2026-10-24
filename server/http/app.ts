@@ -4,7 +4,7 @@ import { NAME_MAX, parseAppearanceParts, parseCharacterName, parseSeed } from '.
 import type { AccessInfo, AgentInfo, ModSummary, OfficeSnapshot, SourceInfo, UpdateStatus } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
 import { handleCodexEvent } from '../codex/http';
-import { handleGrokEvent } from '../grok/http';
+import { handleGrokEvent, handleGrokRegistry } from '../grok/http';
 import type { DayStatsService } from '../history/daystats';
 import type { Office } from '../model/office';
 import type { CodexLive } from '../sources/codex/live';
@@ -65,7 +65,10 @@ export interface ApiDeps {
    * não dependem da trava do terminal).
    */
   codexLive?: CodexLive;
-  /** Fonte do Grok ao vivo: os eventos dos hooks do Grok (POST /api/grok/events, server/grok/http.ts); mesma trava. */
+  /**
+   * Fonte do Grok ao vivo: os eventos dos hooks do Grok (POST /api/grok/events) e o registro das sessões abertas que o
+   * auxiliar do host manda no Docker (POST /api/grok/registry), server/grok/http.ts; mesma trava.
+   */
   grokLive?: GrokLive;
   /** Novo agente pelo escritório (/api/spawn e, para o auxiliar do host, /api/host/spawn/*; server/spawn/spawn.ts). */
   spawn?: SpawnService;
@@ -501,6 +504,14 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       else if (!trusted(req) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
         sendJson(res, 403, { error: denied(req, tr('eventos do Grok só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)')) });
       } else handleGrokEvent(req, res, { live: deps.grokLive, entries: () => accounts.entriesOf('grok') }).catch((err) => fail(res, err));
+      return true;
+    }
+    if (path === '/api/grok/registry') {
+      // Registro das sessões abertas do Grok mandado pelo auxiliar do host (npm run bridge): a mesma trava dos eventos.
+      if (method !== 'POST') methodNotAllowed(res, 'POST');
+      else if (!trusted(req) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
+        sendJson(res, 403, { error: denied(req, tr('o registro do Grok só é aceito pelo próprio computador (http://localhost ou http://127.0.0.1)')) });
+      } else handleGrokRegistry(req, res, { live: deps.grokLive, entries: () => accounts.entriesOf('grok') }).catch((err) => fail(res, err));
       return true;
     }
     if (path === '/api/spawn' || path.startsWith('/api/spawn/')) {

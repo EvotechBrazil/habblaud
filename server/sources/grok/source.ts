@@ -6,9 +6,11 @@
 // - `active_sessions.json` lista as sessões abertas ({session_id, pid, cwd...}), como o registro do Claude Code.
 //   Fora do Docker o PID é conferido (uma entrada pode sobrar depois de um crash); no Docker os PIDs são do host e
 //   o arquivo nem chega lá (o Grok o troca de inode a cada escrita, e uma montagem de arquivo ficaria presa na cópia
-//   antiga), então a presença cai no modo seguinte;
-// - sem o arquivo: sessão aberta = updates.jsonl modificado nos últimos 30 min (FALLBACK_RECENT_MS), e uma sessão
-//   que um hook abriu (SessionStart) fica até o SessionEnd ou 12 h sem nada novo;
+//   antiga). Lá, quem traz o registro é o auxiliar do host (scripts/codex-bridge.ts, npm run bridge): ele lê o
+//   arquivo, confere os PIDs e manda a lista em POST /api/grok/registry a cada 2 s (applyRegistry); a lista vale por
+//   BRIDGE_REGISTRY_TTL_MS, depois a presença cai no modo seguinte;
+// - sem registro nenhum: sessão aberta = updates.jsonl modificado nos últimos 30 min (FALLBACK_RECENT_MS), e uma
+//   sessão que um hook abriu (SessionStart) fica até o SessionEnd ou 12 h sem nada novo;
 // - um evento de hook segura o agente presente por HOOK_PRESENCE_MS mesmo fora do registro (ex.: `grok -p`);
 //   SessionEnd fecha (se o registro também já não o tem, ou depois de SESSION_END_GRACE_MS);
 // - sem registro = fechada (com a mesma folga de 1,5 s do Claude Code).
@@ -36,8 +38,10 @@ import { createGrokState, describeGrokTool, parseUpdateLine, type GrokLineResult
 import { createGrokTerminalParser } from './terminal';
 import { tr } from '../../../shared/i18n';
 
-/** Sem `active_sessions.json` (Docker): presença = updates.jsonl modificado nos últimos 30 min. */
+/** Sem `active_sessions.json` nem o auxiliar (Docker): presença = updates.jsonl modificado nos últimos 30 min. */
 export const FALLBACK_RECENT_MS = 30 * 60_000;
+/** O registro mandado pelo auxiliar do host (POST /api/grok/registry, a cada 2 s) vale por este tempo. */
+export const BRIDGE_REGISTRY_TTL_MS = 15_000;
 /** Sessão aberta por hook (sem o registro): fecha sem nada novo (arquivo ou hook) por este tempo. */
 export const STALE_HOOK_MS = 12 * 3600_000;
 /** Um evento de hook segura o agente presente por este tempo (fora do registro). */
@@ -101,8 +105,10 @@ interface GrokAccount {
   /** Pasta para exibir (no Docker, a do host). */
   configDir: string;
   index: SessionIndex;
-  /** Registro lido no último ciclo (null = sem o arquivo). */
+  /** Registro em vigor no último ciclo (null = sem o arquivo e sem o auxiliar). */
   active: Map<string, ActiveSession> | null;
+  /** Último registro mandado pelo auxiliar do host (já só com os processos vivos) e quando chegou. */
+  bridged?: { at: number; entries: readonly ActiveSession[] };
   /** Modo sem registro: arquivos modificados há pouco (sessão → mtime), revistos a cada 10 s. */
   recent: Map<string, { mtimeMs: number; cwd?: string }>;
   recentAt: number;
@@ -140,7 +146,7 @@ interface SessionTracker {
   watcher?: FSWatcher;
 }
 
-type Via = 'registry' | 'recent' | 'hook';
+type Via = 'registry' | 'bridge' | 'recent' | 'hook';
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
@@ -148,6 +154,14 @@ function str(v: unknown): string | undefined {
 
 function rec(v: unknown): Record<string, unknown> | undefined {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
+function normPath(p: string): string {
+  try {
+    return resolve(p);
+  } catch {
+    return p;
+  }
 }
 
 export class GrokSource implements AgentSource, GrokLive {
@@ -311,13 +325,15 @@ export class GrokSource implements AgentSource, GrokLive {
   }
 
   /**
-   * Sessões presentes de uma conta e por quê: 'registry' (active_sessions.json, com o PID vivo), 'recent' (sem o
-   * registro: updates.jsonl modificado há pouco ou sessão aberta por hook) ou 'hook' (evento de hook recente).
+   * Sessões presentes de uma conta e por quê: 'registry' (active_sessions.json lido aqui, com o PID vivo), 'bridge'
+   * (o registro que o auxiliar do host mandou há menos de BRIDGE_REGISTRY_TTL_MS, PIDs já conferidos lá), 'recent'
+   * (sem registro: updates.jsonl modificado há pouco ou sessão aberta por hook) ou 'hook' (evento de hook recente).
    */
   private presentSessions(acc: GrokAccount, now: number): Map<string, Via> {
     const out = new Map<string, Via>();
     const read = readActiveSessions(acc.dir);
     acc.error = read.error ? tr('{0} ilegível ({1})', [ACTIVE_SESSIONS_FILE, read.error]) : undefined;
+    const bridged = !read.entries && acc.bridged && now - acc.bridged.at < BRIDGE_REGISTRY_TTL_MS ? acc.bridged.entries : undefined;
     if (read.entries) {
       acc.active = new Map();
       this.watchDir(acc.dir);
@@ -325,6 +341,12 @@ export class GrokSource implements AgentSource, GrokLive {
         if (this.checkPid && !this.isAlive(e.pid)) continue;
         acc.active.set(e.sessionId, e);
         out.set(e.sessionId, 'registry');
+      }
+    } else if (bridged) {
+      acc.active = new Map();
+      for (const e of bridged) {
+        acc.active.set(e.sessionId, e);
+        out.set(e.sessionId, 'bridge');
       }
     } else {
       acc.active = null;
@@ -644,6 +666,17 @@ export class GrokSource implements AgentSource, GrokLive {
       .catch((err) => log.warnOnce(`grok-prefix:${path}`, tr('Grok: não foi possível ler o início de um updates.jsonl ({0}).', [errMsg(err)])));
   }
 
+  // ---------------------------------------------------------------- registro pelo auxiliar (GrokLive)
+
+  applyRegistry(account: string | undefined, sessions: readonly ActiveSession[]): boolean {
+    // Só a conta nomeada (id ou pasta): a lista de uma pasta do Grok que o container não conhece nunca cai em outra.
+    const acc = this.accountByRef(account);
+    if (!acc) return false;
+    acc.bridged = { at: this.now(), entries: sessions };
+    this.schedule();
+    return true;
+  }
+
   // ---------------------------------------------------------------- hooks (GrokLive)
 
   applyHookEvent(account: string | undefined, input: Record<string, unknown>): boolean {
@@ -744,22 +777,19 @@ export class GrokSource implements AgentSource, GrokLive {
     return t;
   }
 
+  /** Conta pelo id ou pela pasta (lida aqui ou a do host), exatamente. */
+  private accountByRef(ref: string | undefined): GrokAccount | undefined {
+    if (!ref) return undefined;
+    const byId = this.accs.find((a) => a.id === ref);
+    if (byId) return byId;
+    const abs = normPath(ref);
+    return this.accs.find((a) => normPath(a.dir) === abs || normPath(a.configDir) === abs);
+  }
+
   /** Conta de um evento: `account` (id ou pasta); senão a que já conhece a sessão; com uma conta só, ela. */
   private accountFor(account: string | undefined, sessionId: string): GrokAccount | undefined {
-    const norm = (p: string) => {
-      try {
-        return resolve(p);
-      } catch {
-        return p;
-      }
-    };
-    if (account) {
-      const byId = this.accs.find((a) => a.id === account);
-      if (byId) return byId;
-      const abs = norm(account);
-      const byDir = this.accs.find((a) => norm(a.dir) === abs || norm(a.configDir) === abs);
-      if (byDir) return byDir;
-    }
+    const exact = this.accountByRef(account);
+    if (exact) return exact;
     const known = this.accs.filter((a) => this.sessions.has(`${a.id}:${sessionId}`) || a.active?.has(sessionId));
     if (known.length === 1) return known[0];
     if (account) {

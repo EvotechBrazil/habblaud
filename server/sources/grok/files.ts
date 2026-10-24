@@ -61,17 +61,26 @@ export function parseActiveSessions(raw: string): ActiveSession[] {
   } catch {
     return [];
   }
-  const list = Array.isArray(j) ? j : Array.isArray(rec(j)?.sessions) ? (rec(j)!.sessions as unknown[]) : [];
+  return parseActiveSessionList(Array.isArray(j) ? j : rec(j)?.sessions);
+}
+
+/**
+ * Uma lista de entradas do registro já em JSON (o conteúdo do arquivo, ou a lista que o auxiliar do host manda em
+ * POST /api/grok/registry): aceita as chaves do Grok (`session_id`, `pid_start`, `opened_at`) e as já normalizadas
+ * (`sessionId`, `pidStart`, `openedAt` em ms). Entradas inválidas ficam de fora.
+ */
+export function parseActiveSessionList(list: unknown): ActiveSession[] {
+  if (!Array.isArray(list)) return [];
   const out: ActiveSession[] = [];
   for (const raw of list) {
     const r = rec(raw);
-    const sessionId = str(r?.session_id)?.toLowerCase();
+    const sessionId = (str(r?.session_id) ?? str(r?.sessionId))?.toLowerCase();
     const pid = num(r?.pid);
     const cwd = str(r?.cwd);
     if (!r || !isSessionId(sessionId) || pid === undefined || !cwd) continue;
     const e: ActiveSession = { sessionId, pid, cwd };
-    const pidStart = num(r.pid_start);
-    const openedAt = toMs(r.opened_at);
+    const pidStart = num(r.pid_start) ?? num(r.pidStart);
+    const openedAt = toMs(r.opened_at) ?? num(r.openedAt);
     if (pidStart !== undefined) e.pidStart = pidStart;
     if (openedAt !== undefined) e.openedAt = openedAt;
     out.push(e);
