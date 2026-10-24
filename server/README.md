@@ -364,10 +364,15 @@ A fonte do Grok Build CLI (`sources/grok/`) segue o contrato da do Codex: `provi
   Grok (`isGrokHome`: `active_sessions.json`, ou `sessions/` com pastas `%2F...`, ou `config.toml`; sem `projects/`
   nem `thread-writer-locks/`). `auth.json`, `config.toml` e a memória nunca são lidos. Sem e-mail, plano nem uso.
 - **Sessões abertas** (`sources/grok/files.ts`, `source.ts`): `active_sessions.json` (`{session_id, pid, pid_start,
-  cwd, opened_at}`; o Grok troca o arquivo de inode a cada escrita), com o PID conferido fora do Docker. Sem o arquivo
-  (Docker): `updates.jsonl` modificado nos últimos 30 min, ou sessão aberta por hook (SessionStart sem SessionEnd) com
-  sinal de vida nas últimas 12 h. Evento de hook segura a presença por 60 s. A sala é o `cwd` do registro (ou do
-  `summary.json`, ou do hook).
+  cwd, opened_at}`; o Grok troca o arquivo de inode a cada escrita), com o PID conferido fora do Docker. No Docker o
+  arquivo não chega ao container: o auxiliar do host (`scripts/codex-bridge.ts`, `npm run bridge`) o lê a cada 2 s,
+  confere cada processo (`sources/grok/host-registry.ts`: PID vivo e `pid_start` contra o `lstart` do `ps`, com
+  cache de 30 s) e manda a lista em `POST /api/grok/registry` (`grok/http.ts`, mesma trava dos eventos; a conta é a
+  da pasta GROK_HOME do host, exatamente, nunca por aproximação). `GrokLive.applyRegistry` guarda a lista por
+  `BRIDGE_REGISTRY_TTL_MS` (15 s) e ela vale como o registro (`via: 'bridge'`); o arquivo lido localmente, se existir,
+  manda. Sem arquivo nem auxiliar: `updates.jsonl` modificado nos últimos 30 min, ou sessão aberta por hook
+  (SessionStart sem SessionEnd) com sinal de vida nas últimas 12 h. Evento de hook segura a presença por 60 s. A sala
+  é o `cwd` do registro (ou do `summary.json`, ou do hook).
 - **updates.jsonl** (`sources/grok/updates.ts`): fluxo ACP, uma linha por evento (`method` `session/update`:
   `user_message_chunk`, `agent_thought_chunk`, `agent_message_chunk`, `tool_call`, `tool_call_update`, `plan`;
   `_x.ai/session/update`: `turn_completed` com `usage` por turno e `stop_reason`, `hook_execution`,

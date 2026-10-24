@@ -241,6 +241,10 @@ npm run grok:status        # confere
 Não há nada para aprovar: os hooks globais do Grok (`~/.grok/hooks/*.json`) são sempre confiáveis. O que ainda não
 existe para o Grok: aprovar pelo escritório, mandar mensagens e o uso de 5 h/semanal (veja [Grok](#grok)).
 
+Com o Habblaud **no Docker**, deixe também `npm run bridge` rodando no Mac (o mesmo auxiliar do Codex, que antes se
+chamava `codex:bridge`): é ele que diz ao container quais sessões do Grok estão abertas, conferindo os processos.
+Sem ele, uma sessão do Grok parada há mais de 30 minutos sai do escritório.
+
 ### Abrir no celular (opcional)
 
 Por padrão o Habblaud só aceita conexões do próprio computador. Para abrir no celular (no mesmo Wi-Fi), com Docker:
@@ -643,9 +647,14 @@ O chip da conta do Grok é vazado e leva o selo **GROK**.
   computador; o cartão da conta fica sem barras). Perguntas do Grok são respondidas no próprio Grok.
 - **Subagentes** do Grok não têm arquivo próprio: entram como número nas estatísticas e como a atividade "Delegando".
 - **No Docker**, só `~/.grok/sessions` é montado (somente leitura): o `active_sessions.json` fica de fora porque o
-  Grok o troca de arquivo a cada escrita (uma montagem de arquivo ficaria presa na cópia antiga). No container,
-  sessão aberta = conversa modificada nos últimos 30 minutos, ou uma sessão que o hook abriu (`SessionStart`) e ainda
-  não fechou (`SessionEnd`).
+  Grok o troca de arquivo a cada escrita (uma montagem de arquivo ficaria presa na cópia antiga) e os PIDs dele são
+  do Mac, não do container. Quem leva a lista das sessões abertas ao container é o auxiliar do host, `npm run bridge`
+  (o antigo `codex:bridge`): a cada 2 segundos ele lê o arquivo, confere cada processo (PID vivo e `pid_start`, para
+  não confundir um PID reaproveitado) e manda a lista em `POST /api/grok/registry`. Assim uma sessão TUI do Grok
+  parada há horas continua no escritório e some quando o processo fecha. Se o auxiliar parar, o container volta ao
+  modo sem registro: sessão aberta = conversa modificada nos últimos 30 minutos, ou uma sessão que o hook abriu
+  (`SessionStart`) e ainda não fechou (`SessionEnd`). Montar o `~/.grok` inteiro não resolveria: exporia o
+  `auth.json` ao container e os PIDs continuariam sem conferência.
 - Um `updates.jsonl` pode passar de 300 MB: o Habblaud lê o fim ao abrir e o começo em segundo plano, só até 32 MB (os
   números de uma sessão enorme contam só a parte final). `HABBLAUD_GROK=0` desliga o Grok.
 
@@ -945,6 +954,7 @@ mod/      o mod do Habblaud e os plugins de permissões e de mensagens (plugins 
 | `POST /api/codex/events` | Eventos dos hooks do Codex (sessão aberta, ferramenta, aprovação, fim do turno). Só com acesso local. |
 | `/api/codex/bridge/poll` e `/ack` | O `npm run codex:bridge` busca as mensagens para o Codex e confirma a entrega. Só com acesso local. |
 | `POST /api/grok/events` | Eventos do hook do Grok (sessão aberta, ferramenta, pedido de permissão, fim do turno). Só com acesso local. |
+| `POST /api/grok/registry` | O `npm run bridge` manda a lista das sessões abertas do Grok (`active_sessions.json`, com os processos conferidos no Mac) ao Habblaud no Docker. Só com acesso local. |
 
 Mais detalhes do servidor em [`server/README.md`](server/README.md).
 

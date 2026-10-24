@@ -42,7 +42,7 @@ services:
       # 0 desliga as sessões do Grok no escritório.
       HABBLAUD_GROK: ${HABBLAUD_GROK:-}
       # 1 liga o Novo agente pelo escritório (no Docker, quem começa a sessão é o auxiliar do host, npm run
-      # codex:bridge; o terminal interativo em si não roda no container).
+      # bridge, o antigo codex:bridge; o terminal interativo em si não roda no container).
       HABBLAUD_PTY: ${HABBLAUD_PTY:-}
       # Acesso remoto com login (server/http/remote.ts).
       HABBLAUD_REMOTE_USER: ${HABBLAUD_REMOTE_USER:-}
