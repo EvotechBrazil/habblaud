@@ -42,6 +42,9 @@ class FakeLive {
   applyRegistry(): boolean {
     return false;
   }
+  applyUsage(): boolean {
+    return false;
+  }
 }
 
 let tmp: ReturnType<typeof tempDir>;

@@ -32,6 +32,7 @@ import type { AgentSource } from '../source';
 import { FileTail, LineBuffer, warnOversizedLine } from '../tail';
 import type { TerminalParser } from '../terminal';
 import { ACTIVE_SESSIONS_FILE, detectGrokAccounts } from './accounts';
+import { createBillingReader, usageFromBilling, type GrokUsagePost } from './billing';
 import { isSessionId, readActiveSessions, readSummary, SessionIndex, type ActiveSession, type GrokSummary } from './files';
 import type { GrokLive } from './live';
 import { createGrokState, describeGrokTool, parseUpdateLine, type GrokLineResult, type GrokState } from './updates';
@@ -42,6 +43,8 @@ import { tr } from '../../../shared/i18n';
 export const FALLBACK_RECENT_MS = 30 * 60_000;
 /** O registro mandado pelo auxiliar do host (POST /api/grok/registry, a cada 2 s) vale por este tempo. */
 export const BRIDGE_REGISTRY_TTL_MS = 15_000;
+/** O log do Grok (logs/unified.jsonl, a cota semanal) é conferido a cada tanto, fora do Docker (um stat por conta). */
+export const BILLING_POLL_MS = 10_000;
 /** Sessão aberta por hook (sem o registro): fecha sem nada novo (arquivo ou hook) por este tempo. */
 export const STALE_HOOK_MS = 12 * 3600_000;
 /** Um evento de hook segura o agente presente por este tempo (fora do registro). */
@@ -109,6 +112,12 @@ interface GrokAccount {
   active: Map<string, ActiveSession> | null;
   /** Último registro mandado pelo auxiliar do host (já só com os processos vivos) e quando chegou. */
   bridged?: { at: number; entries: readonly ActiveSession[] };
+  /** A cota em vigor (a leitura mais recente, do log lido aqui ou mandada pelo auxiliar). */
+  usage?: GrokUsagePost;
+  /** Quando o log foi conferido pela última vez (BILLING_POLL_MS). */
+  billingAt?: number;
+  /** O plano já registrado na conta (ctx.subscriptionTier do log). */
+  plan?: string;
   /** Modo sem registro: arquivos modificados há pouco (sessão → mtime), revistos a cada 10 s. */
   recent: Map<string, { mtimeMs: number; cwd?: string }>;
   recentAt: number;
@@ -180,6 +189,8 @@ export class GrokSource implements AgentSource, GrokLive {
   private readonly useWatch: boolean;
   private readonly checkPid: boolean;
   private readonly isAlive: (pid: number) => boolean;
+  /** Lê a cota no fim do logs/unified.jsonl de cada conta (só reabre quando o arquivo muda). */
+  private readonly billing = createBillingReader();
   private stopped = false;
 
   constructor(private readonly opts: GrokSourceOptions) {
@@ -313,6 +324,7 @@ export class GrokSource implements AgentSource, GrokLive {
         }
         seen.add(key);
       }
+      this.pollBilling(acc, now);
     }
     for (const [key, t] of [...this.sessions]) {
       if (seen.has(key)) continue;
@@ -666,7 +678,48 @@ export class GrokSource implements AgentSource, GrokLive {
       .catch((err) => log.warnOnce(`grok-prefix:${path}`, tr('Grok: não foi possível ler o início de um updates.jsonl ({0}).', [errMsg(err)])));
   }
 
-  // ---------------------------------------------------------------- registro pelo auxiliar (GrokLive)
+  // ---------------------------------------------------------------- cota (log do Grok)
+
+  /**
+   * Fora do Docker, a cota vem do próprio log da conta (logs/unified.jsonl, a cada BILLING_POLL_MS). No Docker a pasta
+   * não tem logs/ (não é montada) e nada acontece: a cota chega pelo auxiliar (applyUsage).
+   */
+  private pollBilling(acc: GrokAccount, now: number): void {
+    if (acc.billingAt !== undefined && now - acc.billingAt < BILLING_POLL_MS) return;
+    acc.billingAt = now;
+    let usage: GrokUsagePost | undefined;
+    try {
+      usage = this.billing(acc.dir);
+    } catch (err) {
+      log.warnOnce(`grok-billing:${acc.id}:${errMsg(err)}`, tr('Grok: não foi possível ler a cota no log da conta {0} ({1}).', [acc.id, errMsg(err)]));
+      return;
+    }
+    if (usage) this.pushUsage(acc, usage);
+  }
+
+  /** A cota da conta: vale a leitura mais recente (de onde vier); o plano entra na conta quando muda. */
+  private pushUsage(acc: GrokAccount, usage: GrokUsagePost): void {
+    if (acc.usage && usage.fetchedAt <= acc.usage.fetchedAt) return;
+    acc.usage = usage;
+    this.opts.accounts.setUsage(acc.id, usageFromBilling(usage));
+    if (usage.plan && usage.plan !== acc.plan) {
+      acc.plan = usage.plan;
+      const i = this.accs.indexOf(acc);
+      if (i >= 0 && this.detected[i]) {
+        this.detected[i] = { ...this.detected[i], plan: usage.plan };
+        this.register();
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- registro e cota pelo auxiliar (GrokLive)
+
+  applyUsage(account: string | undefined, usage: GrokUsagePost): boolean {
+    const acc = this.accountByRef(account);
+    if (!acc) return false;
+    this.pushUsage(acc, usage);
+    return true;
+  }
 
   applyRegistry(account: string | undefined, sessions: readonly ActiveSession[]): boolean {
     // Só a conta nomeada (id ou pasta): a lista de uma pasta do Grok que o container não conhece nunca cai em outra.

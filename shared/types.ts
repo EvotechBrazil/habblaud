@@ -278,7 +278,7 @@ export interface UsageWindow {
 export interface AccountUsage {
   /** Sessão de 5 horas. */
   fiveHour?: UsageWindow;
-  /** Limite semanal (todos os modelos). */
+  /** Limite semanal (todos os modelos). No Grok é a única janela (o plano dele não tem sessão de 5 h). */
   sevenDay?: UsageWindow;
   sevenDayOpus?: UsageWindow;
   sevenDaySonnet?: UsageWindow;
@@ -287,9 +287,11 @@ export interface AccountUsage {
    * - 'statusline': capturado ao vivo e gravado em ~/.habblaud/usage/<conta>.json pelo mod do Habblaud
    *   (mod/habblaud, recomendado) ou pelo scripts/statusline-tap.mjs (campo rate_limits do statusline);
    * - 'cache': `cachedUsageUtilization` gravado pelo próprio Claude Code (atualiza quando alguém roda /usage);
-   * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda).
+   * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda);
+   * - 'grok': a linha de cobrança do log do Grok (`logs/unified.jsonl`; só a janela semanal, e só se renova enquanto
+   *   alguma sessão roda).
    */
-  source: 'cache' | 'statusline' | 'codex';
+  source: 'cache' | 'statusline' | 'codex' | 'grok';
   /** Quem gravou o arquivo ao vivo ('statusline'): o mod do Habblaud no Claude Code ou o tap de statusline. */
   via?: 'mod' | 'tap';
   /**

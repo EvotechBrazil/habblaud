@@ -7,14 +7,17 @@
 //
 //   POST /api/grok/events   (hook)   {account?, grokHome?, event: <stdin do hook, textos cortados>}: 200 {ok}
 //   POST /api/grok/registry (auxiliar do host, scripts/codex-bridge.ts) {registries: [{account?, grokHome?,
-//                           sessions: [<entradas do active_sessions.json com o processo vivo>]}]}: 200 {ok, applied}
+//                           sessions: [<entradas do active_sessions.json com o processo vivo>],
+//                           usage?: <a cota lida no log do Grok, sources/grok/billing.ts>}]}: 200 {ok, applied}
 // O registro só faz sentido no Docker (o container não vê o active_sessions.json do host): a fonte guarda a lista por
-// pouco tempo (BRIDGE_REGISTRY_TTL_MS) e, se o auxiliar parar de mandar, volta a decidir pelos arquivos e hooks.
+// pouco tempo (BRIDGE_REGISTRY_TTL_MS) e, se o auxiliar parar de mandar, volta a decidir pelos arquivos e hooks. A
+// cota (`usage`, só a semanal) vai junto porque o container também não monta logs/; inválida, é ignorada (a lista vale).
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAbsolute, resolve } from 'node:path';
 import type { AccountEntry } from '../accounts/service';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { errMsg, log } from '../log';
+import { parseGrokUsagePost, type GrokUsagePost } from '../sources/grok/billing';
 import { parseActiveSessionList, type ActiveSession } from '../sources/grok/files';
 import type { GrokLive } from '../sources/grok/live';
 import { tr } from '../../shared/i18n';
@@ -39,6 +42,8 @@ export interface GrokRegistryPost {
   grokHome?: string;
   /** Sessões abertas (válidas) daquela pasta do Grok. */
   sessions: ActiveSession[];
+  /** A cota lida no log daquela pasta (quando o auxiliar a achou e ela é válida). */
+  usage?: GrokUsagePost;
 }
 
 function rec(v: unknown): Rec | undefined {
@@ -76,8 +81,10 @@ export function parseGrokRegistry(raw: unknown): GrokRegistryPost[] {
     const entry: GrokRegistryPost = { sessions: parseActiveSessionList(r.sessions) };
     const account = shortStr(r.account, 200);
     const grokHome = shortStr(r.grokHome, 4_096);
+    const usage = parseGrokUsagePost(r.usage);
     if (account) entry.account = account;
     if (grokHome) entry.grokHome = grokHome;
+    if (usage) entry.usage = usage;
     out.push(entry);
   }
   return out;
@@ -128,7 +135,9 @@ export async function handleGrokRegistry(
   if (deps.live) {
     for (const r of body) {
       try {
-        if (deps.live.applyRegistry(grokAccountOf(deps.entries(), r.account, r.grokHome), r.sessions)) applied++;
+        const account = grokAccountOf(deps.entries(), r.account, r.grokHome);
+        if (deps.live.applyRegistry(account, r.sessions)) applied++;
+        if (r.usage) deps.live.applyUsage(account, r.usage);
       } catch (err) {
         log.warnOnce(`grok-registry:${errMsg(err)}`, tr('Registro do Grok: falha ao aplicar a lista do auxiliar ({0}).', [errMsg(err)]));
       }

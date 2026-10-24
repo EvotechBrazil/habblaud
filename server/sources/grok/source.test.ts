@@ -7,7 +7,7 @@ import { setQuiet } from '../../log';
 import { NameStore } from '../../model/names';
 import { Office } from '../../model/office';
 import { FIXTURE_CWD, FIXTURE_IDS, G, grokHome, sessionId } from '../../test/grok-fixtures';
-import { BRIDGE_REGISTRY_TTL_MS, FALLBACK_RECENT_MS, GrokSource, HOOK_PRESENCE_MS, SESSION_END_GRACE_MS, STALE_HOOK_MS, WORKING_QUIET_MS } from './source';
+import { BILLING_POLL_MS, BRIDGE_REGISTRY_TTL_MS, FALLBACK_RECENT_MS, GrokSource, HOOK_PRESENCE_MS, SESSION_END_GRACE_MS, STALE_HOOK_MS, WORKING_QUIET_MS } from './source';
 
 setQuiet(true);
 
@@ -430,5 +430,57 @@ describe('fonte do Grok: registro ilegível e sessão das fixtures', () => {
     const tools = ctx.office.detail(`.grok:${id}`)!.history.map((x) => x.tool).filter(Boolean);
     expect(tools).toEqual(expect.arrayContaining(['Bash', 'Grep', 'LS', 'Read']));
     expect(FIXTURE_IDS.media).toBe(id);
+  });
+});
+
+describe('fonte do Grok: a cota semanal (log do Grok e auxiliar do host)', () => {
+  const LINE = (percent: number, ts: string, tier = 'SuperGrok Heavy') =>
+    JSON.stringify({ ts, src: 'shell', pid: 1, lvl: 'info', msg: 'billing: fetched credits config', ctx: { config: { creditUsagePercent: percent, currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: '2026-10-21T20:05:38.827602+00:00', end: '2026-10-28T20:05:38.827602+00:00' } }, subscriptionTier: tier } });
+
+  it('fora do Docker, lê a cota no fim de logs/unified.jsonl da conta (a cada BILLING_POLL_MS) e registra o plano', () => {
+    const ctx = setup({ checkPid: false });
+    ctx.home.noActive();
+    ctx.source.boot();
+    expect(ctx.accounts.usageView('.grok')).toEqual({ status: 'disabled' });
+    const { mkdirSync, writeFileSync, appendFileSync } = require('node:fs') as typeof import('node:fs');
+    const { join } = require('node:path') as typeof import('node:path');
+    mkdirSync(join(ctx.home.dir, 'logs'), { recursive: true });
+    const log = join(ctx.home.dir, 'logs', 'unified.jsonl');
+    const t1 = new Date(ctx.now() - 60_000).toISOString();
+    writeFileSync(log, LINE(15, t1) + '\n');
+    // Ainda dentro do intervalo: não relê.
+    ctx.advance(1_000);
+    ctx.poll();
+    expect(ctx.accounts.usageView('.grok').status).toBe('disabled');
+    ctx.advance(BILLING_POLL_MS);
+    ctx.poll();
+    expect(ctx.accounts.usageView('.grok')).toMatchObject({ status: 'ok', usage: { source: 'grok', sevenDay: { utilization: 15, resetsAt: Date.parse('2026-10-28T20:05:38.827602+00:00') }, fetchedAt: Date.parse(t1) } });
+    expect(ctx.accounts.usageView('.grok').usage?.fiveHour).toBeUndefined();
+    expect(ctx.accounts.find('.grok')?.detected.plan).toBe('SuperGrok Heavy');
+    // Linha nova no log: o número acompanha.
+    const t2 = new Date(ctx.now()).toISOString();
+    appendFileSync(log, LINE(16, t2) + '\n');
+    ctx.advance(BILLING_POLL_MS);
+    ctx.poll();
+    expect(ctx.accounts.usageView('.grok').usage?.sevenDay?.utilization).toBe(16);
+  });
+
+  it('applyUsage (auxiliar, Docker): só a conta nomeada; vale a leitura mais recente, de onde vier', () => {
+    const ctx = setup({ checkPid: false });
+    ctx.home.noActive();
+    ctx.source.boot();
+    const at = ctx.now() - 30_000;
+    expect(ctx.source.applyUsage(undefined, { fetchedAt: at, weeklyUsedPercent: 15 })).toBe(false);
+    expect(ctx.source.applyUsage('.grok-outra', { fetchedAt: at, weeklyUsedPercent: 15 })).toBe(false);
+    expect(ctx.source.applyUsage(ctx.home.dir, { fetchedAt: at, weeklyUsedPercent: 15, periodEnd: at + 3_600_000, plan: 'SuperGrok' })).toBe(true);
+    expect(ctx.accounts.usageView('.grok')).toMatchObject({ status: 'ok', usage: { source: 'grok', sevenDay: { utilization: 15, resetsAt: at + 3_600_000 }, fetchedAt: at } });
+    expect(ctx.accounts.find('.grok')?.detected.plan).toBe('SuperGrok');
+    // Uma leitura mais velha não volta o número; uma mais nova, sim (e o plano muda junto).
+    expect(ctx.source.applyUsage('.grok', { fetchedAt: at - 1, weeklyUsedPercent: 90 })).toBe(true);
+    expect(ctx.accounts.usageView('.grok').usage?.sevenDay?.utilization).toBe(15);
+    ctx.source.applyUsage('.grok', { fetchedAt: at + 1, weeklyUsedPercent: 17, plan: 'SuperGrok Heavy' });
+    expect(ctx.accounts.usageView('.grok').usage?.sevenDay?.utilization).toBe(17);
+    expect(ctx.accounts.find('.grok')?.detected.plan).toBe('SuperGrok Heavy');
+    expect(ctx.accounts.list(new Map()).find((a) => a.id === '.grok')).toMatchObject({ provider: 'grok', plan: 'SuperGrok Heavy', usageStatus: 'ok' });
   });
 });
