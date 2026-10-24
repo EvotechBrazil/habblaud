@@ -240,12 +240,13 @@ npm run grok:install       # grava ~/.grok/hooks/habblaud.json (um arquivo só d
 npm run grok:status        # confere
 ```
 
-There's nothing to approve: Grok's global hooks (`~/.grok/hooks/*.json`) are always trusted. What doesn't exist for
-Grok yet: approving from the office, sending messages and the 5-hour/weekly usage (see [Grok](#grok)).
+There's nothing to approve: Grok's global hooks (`~/.grok/hooks/*.json`) are always trusted. The account's weekly
+quota shows up on the card on its own (Grok only has that window; see [Grok](#grok)). What doesn't exist for Grok
+yet: approving from the office and sending messages.
 
 With Habblaud **in Docker**, also keep `npm run bridge` running on the Mac (the same helper as Codex's, formerly
-`codex:bridge`): it is what tells the container which Grok sessions are open, checking the processes. Without it, a
-Grok session idle for more than 30 minutes leaves the office.
+`codex:bridge`): it is what tells the container which Grok sessions are open, checking the processes, and how much
+of the weekly quota is used. Without it, a Grok session idle for more than 30 minutes leaves the office.
 
 ### Open on your phone (optional)
 
@@ -643,10 +644,16 @@ account chip is hollow and carries the **GROK** tag.
   The hook only observes: it never decides anything, exits right away if Habblaud is down and has a short timeout
   (Grok runs hooks in the foreground). It lives in `~/.grok/hooks/habblaud.json`, a file of Habblaud's own: the other
   Grok hooks and `config.toml` are never touched, and there's no approval step (Grok's global hooks are always trusted).
+- **Weekly quota:** Grok has no 5-hour session, only the plan's weekly period, and writes no usage file. But while a
+  session is running it queries billing every few minutes and records the answer in its own log
+  (`~/.grok/logs/unified.jsonl`: percentage used, period start and end, and the plan). Habblaud reads only the end of
+  that log and shows the week bar, the reset and the plan on the account card; there is no 5-hour bar. Since the
+  number only refreshes with a session running, the card shows the age of the reading, as with Codex. Outside Docker
+  the source reads the log directly; in Docker, the `npm run bridge` helper carries the number to the container
+  (the log is not mounted).
 - **What doesn't exist (yet):** approving from the office (Grok has no permission hook that waits for an outside
-  answer, and usually runs with `permission_mode = "always-approve"`), sending messages (the candidate is `grok -p
-  "text" --resume <id>`, not yet validated on an open session) and the 5-hour/weekly usage (Grok doesn't write those
-  numbers on the computer; the account card has no bars). Grok's questions are answered in Grok itself.
+  answer, and usually runs with `permission_mode = "always-approve"`) and sending messages (the candidate is `grok -p
+  "text" --resume <id>`, not yet validated on an open session). Grok's questions are answered in Grok itself.
 - Grok **subagents** have no file of their own: they count in the statistics and show up as the "Delegating" activity.
 - **In Docker**, only `~/.grok/sessions` is mounted (read-only): `active_sessions.json` stays out because Grok
   replaces the file on every write (a file mount would stay stuck on the old copy) and its PIDs belong to the Mac,
@@ -711,8 +718,8 @@ Want to see the office full without having any sessions open?
 
 > **Codex** accounts come in on their own (each `~/.codex*` folder or `CODEX_HOME` is an account; the letter comes from an
 > `alias x='CODEX_HOME=… codex'`, if there is one) and their usage comes from Codex's files; see [Codex](#codex). Same
-> for **Grok** accounts (`~/.grok*` or `GROK_HOME`; alias with `GROK_HOME=…`), but without usage: Grok doesn't write
-> it; see [Grok](#grok). The rest of this section is about Claude Code.
+> for **Grok** accounts (`~/.grok*` or `GROK_HOME`; alias with `GROK_HOME=…`), with only the weekly quota, read from
+> Grok's log; see [Grok](#grok). The rest of this section is about Claude Code.
 
 If you use more than one Claude Code account (for example, a `c` shortcut with `~/.claude` and a `d` with
 `CLAUDE_CONFIG_DIR=~/.claude-conta2`), Habblaud shows them all together: each agent carries its account's chip and the top bar

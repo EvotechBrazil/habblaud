@@ -362,7 +362,8 @@ A fonte do Grok Build CLI (`sources/grok/`) segue o contrato da do Codex: `provi
 
 - **Contas** (`sources/grok/accounts.ts`): `HABBLAUD_GROK_DIRS` (substitui) ou `GROK_HOME` e `~/.grok*` com cara de
   Grok (`isGrokHome`: `active_sessions.json`, ou `sessions/` com pastas `%2F...`, ou `config.toml`; sem `projects/`
-  nem `thread-writer-locks/`). `auth.json`, `config.toml` e a memória nunca são lidos. Sem e-mail, plano nem uso.
+  nem `thread-writer-locks/`). `auth.json`, `config.toml` e a memória nunca são lidos. Sem e-mail; o plano e a cota
+  vêm do log (abaixo).
 - **Sessões abertas** (`sources/grok/files.ts`, `source.ts`): `active_sessions.json` (`{session_id, pid, pid_start,
   cwd, opened_at}`; o Grok troca o arquivo de inode a cada escrita), com o PID conferido fora do Docker. No Docker o
   arquivo não chega ao container: o auxiliar do host (`scripts/codex-bridge.ts`, `npm run bridge`) o lê a cada 2 s,
@@ -370,7 +371,14 @@ A fonte do Grok Build CLI (`sources/grok/`) segue o contrato da do Codex: `provi
   cache de 30 s) e manda a lista em `POST /api/grok/registry` (`grok/http.ts`, mesma trava dos eventos; a conta é a
   da pasta GROK_HOME do host, exatamente, nunca por aproximação). `GrokLive.applyRegistry` guarda a lista por
   `BRIDGE_REGISTRY_TTL_MS` (15 s) e ela vale como o registro (`via: 'bridge'`); o arquivo lido localmente, se existir,
-  manda. Sem arquivo nem auxiliar: `updates.jsonl` modificado nos últimos 30 min, ou sessão aberta por hook
+  manda.
+- **Cota semanal** (`sources/grok/billing.ts`): o Grok não grava uso, mas registra no `logs/unified.jsonl` a resposta
+  da cobrança (`"msg":"billing: fetched credits config"`: `ctx.config.creditUsagePercent`, `currentPeriod`
+  semanal com `start`/`end`, `ctx.subscriptionTier`). Só a janela semanal (`AccountUsage.sevenDay`, `source: 'grok'`,
+  `fetchedAt` = o `ts` da linha); o plano entra na conta. `readLatestBilling` lê só o fim do log (256 KB) e
+  `createBillingReader` só reabre quando tamanho ou mtime mudam. Fora do Docker a fonte confere o log a cada
+  `BILLING_POLL_MS` (10 s); no Docker `logs/` não é montado e a cota vem no campo `usage` de `POST /api/grok/registry`
+  (o auxiliar manda em toda rodada; `GrokLive.applyUsage`). Vale a leitura mais recente, de onde vier. Sem arquivo nem auxiliar: `updates.jsonl` modificado nos últimos 30 min, ou sessão aberta por hook
   (SessionStart sem SessionEnd) com sinal de vida nas últimas 12 h. Evento de hook segura a presença por 60 s. A sala
   é o `cwd` do registro (ou do `summary.json`, ou do hook).
 - **updates.jsonl** (`sources/grok/updates.ts`): fluxo ACP, uma linha por evento (`method` `session/update`:

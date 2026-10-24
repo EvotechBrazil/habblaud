@@ -238,11 +238,13 @@ npm run grok:install       # grava ~/.grok/hooks/habblaud.json (um arquivo só d
 npm run grok:status        # confere
 ```
 
-Não há nada para aprovar: os hooks globais do Grok (`~/.grok/hooks/*.json`) são sempre confiáveis. O que ainda não
-existe para o Grok: aprovar pelo escritório, mandar mensagens e o uso de 5 h/semanal (veja [Grok](#grok)).
+Não há nada para aprovar: os hooks globais do Grok (`~/.grok/hooks/*.json`) são sempre confiáveis. A cota semanal
+da conta aparece no cartão sozinha (o Grok só tem essa janela; veja [Grok](#grok)). O que ainda não existe para o
+Grok: aprovar pelo escritório e mandar mensagens.
 
 Com o Habblaud **no Docker**, deixe também `npm run bridge` rodando no Mac (o mesmo auxiliar do Codex, que antes se
-chamava `codex:bridge`): é ele que diz ao container quais sessões do Grok estão abertas, conferindo os processos.
+chamava `codex:bridge`): é ele que diz ao container quais sessões do Grok estão abertas, conferindo os processos, e
+quanto da cota semanal já foi usado.
 Sem ele, uma sessão do Grok parada há mais de 30 minutos sai do escritório.
 
 ### Abrir no celular (opcional)
@@ -641,10 +643,15 @@ O chip da conta do Grok é vazado e leva o selo **GROK**.
   nunca decide nada, sai na hora se o Habblaud estiver parado e tem prazo curto (o Grok roda hooks em primeiro
   plano). Ele fica em `~/.grok/hooks/habblaud.json`, um arquivo só do Habblaud: os outros hooks do Grok e o
   `config.toml` nunca são tocados, e não há passo de aprovação (os hooks globais do Grok são sempre confiáveis).
+- **Cota semanal:** o Grok não tem sessão de 5 horas, só o período semanal do plano, e não grava um arquivo de uso.
+  Mas, enquanto alguma sessão roda, ele consulta a cobrança a cada poucos minutos e registra a resposta no log dele
+  (`~/.grok/logs/unified.jsonl`: percentual usado, início e fim do período e o plano). O Habblaud lê só o fim desse
+  log e mostra no cartão da conta a barra da semana, o reinício e o plano; a barra de 5 h não existe. Como o número
+  só se renova com sessão rodando, o cartão mostra a idade da leitura, como no Codex. Fora do Docker a fonte lê o
+  log direto; no Docker, é o auxiliar `npm run bridge` que leva o número ao container (o log não é montado).
 - **O que não existe (ainda):** aprovar pelo escritório (o Grok não tem um hook de permissão que espere resposta de
-  fora, e normalmente roda com `permission_mode = "always-approve"`), mandar mensagens (o candidato é `grok -p "texto"
-  --resume <id>`, ainda não validado numa sessão aberta) e o uso de 5 h/semanal (o Grok não grava esses números no
-  computador; o cartão da conta fica sem barras). Perguntas do Grok são respondidas no próprio Grok.
+  fora, e normalmente roda com `permission_mode = "always-approve"`) e mandar mensagens (o candidato é `grok -p
+  "texto" --resume <id>`, ainda não validado numa sessão aberta). Perguntas do Grok são respondidas no próprio Grok.
 - **Subagentes** do Grok não têm arquivo próprio: entram como número nas estatísticas e como a atividade "Delegando".
 - **No Docker**, só `~/.grok/sessions` é montado (somente leitura): o `active_sessions.json` fica de fora porque o
   Grok o troca de arquivo a cada escrita (uma montagem de arquivo ficaria presa na cópia antiga) e os PIDs dele são
@@ -709,8 +716,8 @@ Quer ver o escritório cheio sem ter sessões abertas?
 
 > As contas do **Codex** entram sozinhas (cada pasta `~/.codex*` ou `CODEX_HOME` é uma conta; a letra vem de um
 > `alias x='CODEX_HOME=… codex'`, se houver) e o uso delas vem dos arquivos do Codex; veja [Codex](#codex). As do
-> **Grok** idem (`~/.grok*` ou `GROK_HOME`; alias com `GROK_HOME=…`), mas sem uso: o Grok não o grava; veja
-> [Grok](#grok). O resto desta seção é sobre o Claude Code.
+> **Grok** idem (`~/.grok*` ou `GROK_HOME`; alias com `GROK_HOME=…`), com só a cota semanal, lida do log do Grok;
+> veja [Grok](#grok). O resto desta seção é sobre o Claude Code.
 
 Se você usa mais de uma conta do Claude Code (por exemplo, um atalho `c` com `~/.claude` e um `d` com
 `CLAUDE_CONFIG_DIR=~/.claude-conta2`), o Habblaud mostra todas juntas: cada agente leva o chip da sua conta e o topo
