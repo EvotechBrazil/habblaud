@@ -20,7 +20,9 @@
 // A cada rodada este processo lê o registro de cada pasta do Grok (GROK_HOME, ~/.grok* ou HABBLAUD_GROK_DIRS;
 // HABBLAUD_GROK=0 desliga), confere os processos (PID vivo e, se houver, o `pid_start`; server/sources/grok/
 // host-registry.ts) e manda a lista em POST /api/grok/registry: as sessões TUI abertas e ociosas há horas continuam
-// no escritório e somem quando o processo fecha. Um Habblaud antigo (ou sem o Grok) recusa a rota: tenta de novo a
+// no escritório e somem quando o processo fecha. Junto vai a cota semanal da conta, que o Grok só registra no log
+// dele (logs/unified.jsonl, que o container também não monta; server/sources/grok/billing.ts). Um Habblaud antigo (ou
+// sem o Grok) recusa a rota: tenta de novo a
 // cada minuto. Só lê o active_sessions.json: auth.json, config.toml e as conversas nunca.
 // Ctrl+C para parar.
 import { statSync } from 'node:fs';
@@ -37,6 +39,7 @@ import { checkFile, insideKnownFolder, tempRoots } from '../server/deliveries/fi
 import { discoverClaudeDirs } from '../server/accounts/detect';
 import { HOST_WAIT_MS } from '../server/host-wait';
 import { discoverGrokDirs, grokDisabled } from '../server/sources/grok/accounts';
+import { createBillingReader, type GrokUsagePost } from '../server/sources/grok/billing';
 import type { ActiveSession } from '../server/sources/grok/files';
 import { createLivenessCheck, readLiveSessions } from '../server/sources/grok/host-registry';
 import { readFileSync } from 'node:fs';
@@ -51,7 +54,7 @@ const REQUEST_TIMEOUT_MS = 5_000;
 /** As pastas do Grok do host são procuradas de novo de tempos em tempos (uma conta nova sem reiniciar o auxiliar). */
 export const GROK_DIRS_REFRESH_MS = 60_000;
 
-const USAGE = tr('Uso: npm run bridge [-- opções]   (o nome antigo, npm run codex:bridge, ainda vale)\n\nAuxiliar do host para o Habblaud no Docker (deixe rodando no computador): entrega as mensagens do escritório às sessões do Codex, começa os agentes novos, lê os arquivos das entregas, transcreve o ditado e manda ao container o registro das sessões abertas do Grok (active_sessions.json, com os processos conferidos).\n\nOpções:\n  --port <n>   porta do Habblaud (padrão: HABBLAUD_PORT ou {0})\n  --once       faz uma rodada só e sai\n  -h, --help   mostra esta ajuda\n\nBinário do Codex: HABBLAUD_CODEX_BIN ou `codex` do PATH. Pastas do Grok: GROK_HOME, ~/.grok* ou HABBLAUD_GROK_DIRS (HABBLAUD_GROK=0 desliga).', [DEFAULT_PORT]);
+const USAGE = tr('Uso: npm run bridge [-- opções]   (o nome antigo, npm run codex:bridge, ainda vale)\n\nAuxiliar do host para o Habblaud no Docker (deixe rodando no computador): entrega as mensagens do escritório às sessões do Codex, começa os agentes novos, lê os arquivos das entregas, transcreve o ditado e manda ao container o registro das sessões abertas do Grok (active_sessions.json, com os processos conferidos) e a cota semanal dele (lida no fim de logs/unified.jsonl).\n\nOpções:\n  --port <n>   porta do Habblaud (padrão: HABBLAUD_PORT ou {0})\n  --once       faz uma rodada só e sai\n  -h, --help   mostra esta ajuda\n\nBinário do Codex: HABBLAUD_CODEX_BIN ou `codex` do PATH. Pastas do Grok: GROK_HOME, ~/.grok* ou HABBLAUD_GROK_DIRS (HABBLAUD_GROK=0 desliga).', [DEFAULT_PORT]);
 
 export interface BridgeMessage {
   id: string;
@@ -336,8 +339,10 @@ export async function filesRound(
 /**
  * Registro das sessões abertas do Grok: lê o active_sessions.json de cada pasta do Grok do host (`live` já devolve só
  * as sessões com o processo vivo) e manda tudo numa chamada a POST /api/grok/registry, mesmo vazio (é o sinal de que
- * o auxiliar está no ar: o Habblaud guarda a lista por pouco tempo). `counts` (pasta → sessões) serve para avisar no
- * log só quando o número muda. Habblaud antigo ou sem o Grok: recusa (403/404). Nunca lança.
+ * o auxiliar está no ar: o Habblaud guarda a lista por pouco tempo). Junto vai a cota semanal da pasta (`billing`: a
+ * última linha de cobrança do log do Grok; sem ela, nada), em toda rodada (é pequena, e um container que reiniciou
+ * precisa dela de novo). `counts` (pasta → sessões) e `percents` (pasta → percentual) servem para avisar no log só
+ * quando o número muda. Habblaud antigo ou sem o Grok: recusa (403/404). Nunca lança.
  */
 export async function grokRegistryRound(
   post: Post,
@@ -345,8 +350,13 @@ export async function grokRegistryRound(
   live: (dir: string) => ActiveSession[],
   log: (line: string) => void = () => {},
   counts: Map<string, number> = new Map(),
+  billing: (dir: string) => GrokUsagePost | undefined = () => undefined,
+  percents: Map<string, number> = new Map(),
 ): Promise<RoundResult> {
-  const registries = dirs.map((dir) => ({ grokHome: dir, sessions: live(dir) }));
+  const registries = dirs.map((dir) => {
+    const usage = billing(dir);
+    return { grokHome: dir, sessions: live(dir), ...(usage ? { usage } : {}) };
+  });
   const r = await post('/api/grok/registry', { registries });
   if (!r) return { state: 'down' };
   const json = rec(r.json);
@@ -354,14 +364,23 @@ export async function grokRegistryRound(
     const error = rec(r.json)?.error;
     return { state: 'refused', status: r.status, ...(typeof error === 'string' ? { error } : {}) };
   }
-  for (const { grokHome, sessions } of registries) {
-    if (counts.get(grokHome) === sessions.length) continue;
-    counts.set(grokHome, sessions.length);
-    log(
-      sessions.length === 1
-        ? tr('registro do Grok: 1 sessão aberta em {0}', [grokHome])
-        : tr('registro do Grok: {0} sessões abertas em {1}', [sessions.length, grokHome]),
-    );
+  for (const { grokHome, sessions, usage } of registries) {
+    if (counts.get(grokHome) !== sessions.length) {
+      counts.set(grokHome, sessions.length);
+      log(
+        sessions.length === 1
+          ? tr('registro do Grok: 1 sessão aberta em {0}', [grokHome])
+          : tr('registro do Grok: {0} sessões abertas em {1}', [sessions.length, grokHome]),
+      );
+    }
+    if (usage && percents.get(grokHome) !== usage.weeklyUsedPercent) {
+      percents.set(grokHome, usage.weeklyUsedPercent);
+      log(
+        usage.plan
+          ? tr('cota do Grok: {0}% da semana usados em {1} (plano {2})', [usage.weeklyUsedPercent, grokHome, usage.plan])
+          : tr('cota do Grok: {0}% da semana usados em {1}', [usage.weeklyUsedPercent, grokHome]),
+      );
+    }
   }
   const ok = json.applied === registries.length;
   if (!ok) log(tr('✗ o Habblaud aceitou o registro de {0} de {1} pastas do Grok (pasta não montada no container ou HABBLAUD_GROK=0 lá?)', [json.applied, registries.length]));
@@ -423,6 +442,8 @@ async function main(): Promise<void> {
   // Registro do Grok: as pastas do host (revistas a cada minuto), o conferidor de processos e o estado para o log.
   const grokLive = createLivenessCheck();
   const grokCounts = new Map<string, number>();
+  const grokBilling = createBillingReader();
+  const grokPercents = new Map<string, number>();
   let grokDirs: string[] = [];
   let grokDirsAt = 0;
   let grokRetryAt = 0;
@@ -437,12 +458,12 @@ async function main(): Promise<void> {
       grokDirsAt = Date.now() + GROK_DIRS_REFRESH_MS;
     }
     if (grokDirs.length && Date.now() >= grokRetryAt) {
-      const g = await grokRegistryRound(post, grokDirs, (dir) => readLiveSessions(dir, grokLive), log, grokCounts);
+      const g = await grokRegistryRound(post, grokDirs, (dir) => readLiveSessions(dir, grokLive), log, grokCounts, grokBilling, grokPercents);
       const text =
         g.state === 'refused'
           ? tr('o Habblaud recusou o registro do Grok ({0}{1}): Habblaud antigo ou sem o Grok; tento de novo a cada minuto.', [g.status, g.error ? `: ${g.error}` : ''])
           : g.state === 'ok'
-            ? tr('registro do Grok: as sessões abertas de {0} vão ao Habblaud a cada {1} s (PIDs conferidos aqui).', [grokDirs.join(', '), POLL_MS / 1_000])
+            ? tr('registro do Grok: as sessões abertas de {0} e a cota semanal vão ao Habblaud a cada {1} s (PIDs conferidos aqui).', [grokDirs.join(', '), POLL_MS / 1_000])
             : '';
       if (g.state === 'refused') grokRetryAt = Date.now() + REFUSED_RETRY_MS;
       if (text && text !== grokLast) log(text);

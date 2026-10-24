@@ -305,6 +305,28 @@ describe('grokRegistryRound (registro das sessões abertas do Grok pelo auxiliar
     expect(lines).toEqual([]);
   });
 
+  it('a cota semanal da pasta vai junto (toda rodada) e o log avisa quando o percentual muda', async () => {
+    const posts: Array<[string, unknown]> = [];
+    const post: Post = async (path, body) => {
+      posts.push([path, body]);
+      return { status: 200, json: { ok: true, applied: ((body as { registries: unknown[] }).registries ?? []).length } };
+    };
+    const usage = { fetchedAt: 1_700_000_000_000, weeklyUsedPercent: 15, periodEnd: 1_700_600_000_000, plan: 'SuperGrok Heavy' };
+    const billing = (dir: string) => (dir.endsWith('a') ? usage : undefined);
+    const lines: string[] = [];
+    const counts = new Map<string, number>();
+    const percents = new Map<string, number>();
+    await grokRegistryRound(post, ['/h/a', '/h/b'], () => [], (l) => lines.push(l), counts, billing, percents);
+    expect(posts).toEqual([['/api/grok/registry', { registries: [{ grokHome: '/h/a', sessions: [], usage }, { grokHome: '/h/b', sessions: [] }] }]]);
+    expect(lines).toContain('cota do Grok: 15% da semana usados em /h/a (plano SuperGrok Heavy)');
+    lines.length = 0;
+    await grokRegistryRound(post, ['/h/a', '/h/b'], () => [], (l) => lines.push(l), counts, billing, percents);
+    expect(posts).toHaveLength(2);
+    expect(lines).toEqual([]);
+    await grokRegistryRound(post, ['/h/a'], () => [], (l) => lines.push(l), counts, () => ({ fetchedAt: 1, weeklyUsedPercent: 16 }), percents);
+    expect(lines).toEqual(['cota do Grok: 16% da semana usados em /h/a']);
+  });
+
   it('Habblaud fora do ar, recusando (versão antiga: 404) ou sem reconhecer a pasta (applied menor)', async () => {
     expect(await grokRegistryRound(async () => null, ['/h/a'], () => [])).toEqual({ state: 'down' });
     expect(await grokRegistryRound(async () => ({ status: 404, json: { error: 'rota desconhecida' } }), ['/h/a'], () => [])).toEqual({ state: 'refused', status: 404, error: 'rota desconhecida' });
