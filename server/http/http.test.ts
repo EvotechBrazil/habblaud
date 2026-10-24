@@ -126,8 +126,9 @@ describe('API HTTP', () => {
     await readUntil(/event: feed\n/);
     expect(text).toMatch(/^retry: 2000\n\nevent: snapshot\ndata: \{/);
     env.office.addActivity('.claude:1', { id: 'act-x', at: Date.now(), kind: 'read', icon: '📖', text: 'Lendo a.ts' }, true);
-    await readUntil(/"id":"act-x"/);
-    expect(text).toContain('event: feed\ndata: [{"id":"act-x"');
+    // O snapshot novo (com a atividade em `recent`) sai antes do feed: espera o quadro do feed em si.
+    await readUntil(/event: feed\ndata: \[\{"id":"act-x"/);
+    expect(text).toMatch(/event: snapshot\ndata: \{[^\n]*"id":"act-x"[^\n]*\n\nevent: feed\ndata: \[\{"id":"act-x"/);
     ctrl.abort();
   });
 
