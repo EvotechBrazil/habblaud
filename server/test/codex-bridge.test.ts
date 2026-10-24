@@ -6,7 +6,7 @@ import { mkdirSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkMessage, dictationRound, filesRound, httpPost, parseArgs, round, spawnRound, type Post } from '../../scripts/codex-bridge';
+import { checkMessage, dictationRound, filesRound, grokRegistryRound, httpPost, parseArgs, round, spawnRound, type Post } from '../../scripts/codex-bridge';
 import { spawnUrl } from '../spawn/spawn';
 import { AccountsService } from '../accounts/service';
 import { createApiHandler } from '../http/app';
@@ -278,5 +278,39 @@ describe('spawnRound (agentes novos pelo auxiliar)', () => {
   it('Habblaud fora do ar ou recusando', async () => {
     expect(await spawnRound(async () => null, async () => ({ ok: true }))).toEqual({ state: 'down' });
     expect(await spawnRound(async () => ({ status: 403, json: { error: 'x' } }), async () => ({ ok: true }))).toEqual({ state: 'refused', status: 403 });
+  });
+});
+
+describe('grokRegistryRound (registro das sessões abertas do Grok pelo auxiliar)', () => {
+  const SID = '0199b0c0-1234-7abc-8def-0123456789ab';
+  it('manda as sessões vivas de cada pasta numa chamada só (mesmo vazia) e avisa no log quando o número muda', async () => {
+    const posts: Array<[string, unknown]> = [];
+    const post: Post = async (path, body) => {
+      posts.push([path, body]);
+      return { status: 200, json: { ok: true, applied: 2 } };
+    };
+    const live = (dir: string) => (dir.endsWith('a') ? [{ sessionId: SID, pid: 7, pidStart: 1, cwd: '/p/loja' }] : []);
+    const lines: string[] = [];
+    const counts = new Map<string, number>();
+    expect(await grokRegistryRound(post, ['/h/a', '/h/b'], live, (l) => lines.push(l), counts)).toEqual({ state: 'ok', results: [{ id: 'grok-registry', ok: true }] });
+    expect(posts).toEqual([
+      [
+        '/api/grok/registry',
+        { registries: [{ grokHome: '/h/a', sessions: [{ sessionId: SID, pid: 7, pidStart: 1, cwd: '/p/loja' }] }, { grokHome: '/h/b', sessions: [] }] },
+      ],
+    ]);
+    expect(lines).toEqual(['registro do Grok: 1 sessão aberta em /h/a', 'registro do Grok: 0 sessões abertas em /h/b']);
+    lines.length = 0;
+    await grokRegistryRound(post, ['/h/a', '/h/b'], live, (l) => lines.push(l), counts);
+    expect(lines).toEqual([]);
+  });
+
+  it('Habblaud fora do ar, recusando (versão antiga: 404) ou sem reconhecer a pasta (applied menor)', async () => {
+    expect(await grokRegistryRound(async () => null, ['/h/a'], () => [])).toEqual({ state: 'down' });
+    expect(await grokRegistryRound(async () => ({ status: 404, json: { error: 'rota desconhecida' } }), ['/h/a'], () => [])).toEqual({ state: 'refused', status: 404, error: 'rota desconhecida' });
+    expect(await grokRegistryRound(async () => ({ status: 200, json: { ok: true } }), ['/h/a'], () => [])).toMatchObject({ state: 'refused', status: 200 });
+    const lines: string[] = [];
+    expect(await grokRegistryRound(async () => ({ status: 200, json: { ok: false, applied: 0 } }), ['/h/a'], () => [], (l) => lines.push(l))).toEqual({ state: 'ok', results: [{ id: 'grok-registry', ok: false }] });
+    expect(lines.at(-1)).toContain('0 de 1');
   });
 });

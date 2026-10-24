@@ -41,6 +41,7 @@
     "codex:install": "tsx scripts/codex-install.ts install",
     "codex:uninstall": "tsx scripts/codex-install.ts uninstall",
     "codex:status": "tsx scripts/codex-install.ts status",
+    "bridge": "tsx scripts/codex-bridge.ts",
     "codex:bridge": "tsx scripts/codex-bridge.ts",
     "grok:install": "tsx scripts/grok-install.ts install",
     "grok:uninstall": "tsx scripts/grok-install.ts uninstall",

@@ -25,6 +25,12 @@ import {
 
 /** Registro das sessões abertas (o Grok regrava o arquivo inteiro a cada abertura/fechamento). */
 export const ACTIVE_SESSIONS_FILE = 'active_sessions.json';
+
+/** HABBLAUD_GROK desligado (0, false, off, no): sem o Grok no escritório (docker:up e o auxiliar do host). */
+export function grokDisabled(env: NodeJS.ProcessEnv): boolean {
+  const v = env.HABBLAUD_GROK?.trim();
+  return !!v && !/^(1|true|yes|sim|on)$/i.test(v);
+}
 /** Pasta das sessões: sessions/<cwd codificado como URL>/<id da sessão>/. */
 export const SESSIONS_DIR = 'sessions';
 

@@ -1,6 +1,6 @@
-// Auxiliar do Habblaud para as mensagens ao Codex quando o Habblaud roda no Docker. Roda no HOST (Mac), com tsx:
+// Auxiliar do host para o Habblaud no Docker: tudo o que precisa rodar no computador (Mac) e não no container. Com tsx:
 //
-//   npm run codex:bridge     (opções: --port <n>, --once)
+//   npm run bridge           (opções: --port <n>, --once; `npm run codex:bridge` é o nome antigo, ainda vale)
 //
 // As mensagens ao Codex entram na sessão por `codex queue --thread <threadId> --message <texto>`, que precisa rodar no
 // Mac (é aqui que estão o Codex e as pastas das contas); no Docker o servidor não alcança o binário. Este processo, a
@@ -15,6 +15,13 @@
 // ~/.habblaud/attachments/), lê os arquivos das entregas (só de pastas de projeto conhecidas, da pasta temporária e dos
 // anexos) e transcreve o ditado com o Whisper local (whisper-cli + ffmpeg + modelo; ver server/dictation/whisper.ts).
 // Arquivos e ditado usam rodadas com espera: o Habblaud só responde quando chega trabalho (ou a cada 20 s).
+//
+// Grok: o container não vê o active_sessions.json do host (o Grok o troca de inode a cada escrita) e os PIDs são daqui.
+// A cada rodada este processo lê o registro de cada pasta do Grok (GROK_HOME, ~/.grok* ou HABBLAUD_GROK_DIRS;
+// HABBLAUD_GROK=0 desliga), confere os processos (PID vivo e, se houver, o `pid_start`; server/sources/grok/
+// host-registry.ts) e manda a lista em POST /api/grok/registry: as sessões TUI abertas e ociosas há horas continuam
+// no escritório e somem quando o processo fecha. Um Habblaud antigo (ou sem o Grok) recusa a rota: tenta de novo a
+// cada minuto. Só lê o active_sessions.json: auth.json, config.toml e as conversas nunca.
 // Ctrl+C para parar.
 import { statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
@@ -29,6 +36,9 @@ import { createWhisperTranscriber, findWhisper, type Transcriber } from '../serv
 import { checkFile, insideKnownFolder, tempRoots } from '../server/deliveries/files';
 import { discoverClaudeDirs } from '../server/accounts/detect';
 import { HOST_WAIT_MS } from '../server/host-wait';
+import { discoverGrokDirs, grokDisabled } from '../server/sources/grok/accounts';
+import type { ActiveSession } from '../server/sources/grok/files';
+import { createLivenessCheck, readLiveSessions } from '../server/sources/grok/host-registry';
 import { readFileSync } from 'node:fs';
 
 export const DEFAULT_PORT = 4747;
@@ -38,8 +48,10 @@ export const POLL_MS = 2_000;
 export const WAIT_ROUND_MIN_MS = 500;
 export const REFUSED_RETRY_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 5_000;
+/** As pastas do Grok do host são procuradas de novo de tempos em tempos (uma conta nova sem reiniciar o auxiliar). */
+export const GROK_DIRS_REFRESH_MS = 60_000;
 
-const USAGE = tr('Uso: npm run codex:bridge [-- opções]\n\nEntrega as mensagens do escritório às sessões do Codex quando o Habblaud roda no Docker (deixe rodando no computador).\n\nOpções:\n  --port <n>   porta do Habblaud (padrão: HABBLAUD_PORT ou {0})\n  --once       faz uma rodada só e sai\n  -h, --help   mostra esta ajuda\n\nBinário do Codex: HABBLAUD_CODEX_BIN ou `codex` do PATH.', [DEFAULT_PORT]);
+const USAGE = tr('Uso: npm run bridge [-- opções]   (o nome antigo, npm run codex:bridge, ainda vale)\n\nAuxiliar do host para o Habblaud no Docker (deixe rodando no computador): entrega as mensagens do escritório às sessões do Codex, começa os agentes novos, lê os arquivos das entregas, transcreve o ditado e manda ao container o registro das sessões abertas do Grok (active_sessions.json, com os processos conferidos).\n\nOpções:\n  --port <n>   porta do Habblaud (padrão: HABBLAUD_PORT ou {0})\n  --once       faz uma rodada só e sai\n  -h, --help   mostra esta ajuda\n\nBinário do Codex: HABBLAUD_CODEX_BIN ou `codex` do PATH. Pastas do Grok: GROK_HOME, ~/.grok* ou HABBLAUD_GROK_DIRS (HABBLAUD_GROK=0 desliga).', [DEFAULT_PORT]);
 
 export interface BridgeMessage {
   id: string;
@@ -321,6 +333,41 @@ export async function filesRound(
   return { state: 'ok', results: results.map(({ id, ok, error }) => ({ id, ok, ...(error ? { error } : {}) })) };
 }
 
+/**
+ * Registro das sessões abertas do Grok: lê o active_sessions.json de cada pasta do Grok do host (`live` já devolve só
+ * as sessões com o processo vivo) e manda tudo numa chamada a POST /api/grok/registry, mesmo vazio (é o sinal de que
+ * o auxiliar está no ar: o Habblaud guarda a lista por pouco tempo). `counts` (pasta → sessões) serve para avisar no
+ * log só quando o número muda. Habblaud antigo ou sem o Grok: recusa (403/404). Nunca lança.
+ */
+export async function grokRegistryRound(
+  post: Post,
+  dirs: readonly string[],
+  live: (dir: string) => ActiveSession[],
+  log: (line: string) => void = () => {},
+  counts: Map<string, number> = new Map(),
+): Promise<RoundResult> {
+  const registries = dirs.map((dir) => ({ grokHome: dir, sessions: live(dir) }));
+  const r = await post('/api/grok/registry', { registries });
+  if (!r) return { state: 'down' };
+  const json = rec(r.json);
+  if (r.status !== 200 || typeof json?.applied !== 'number') {
+    const error = rec(r.json)?.error;
+    return { state: 'refused', status: r.status, ...(typeof error === 'string' ? { error } : {}) };
+  }
+  for (const { grokHome, sessions } of registries) {
+    if (counts.get(grokHome) === sessions.length) continue;
+    counts.set(grokHome, sessions.length);
+    log(
+      sessions.length === 1
+        ? tr('registro do Grok: 1 sessão aberta em {0}', [grokHome])
+        : tr('registro do Grok: {0} sessões abertas em {1}', [sessions.length, grokHome]),
+    );
+  }
+  const ok = json.applied === registries.length;
+  if (!ok) log(tr('✗ o Habblaud aceitou o registro de {0} de {1} pastas do Grok (pasta não montada no container ou HABBLAUD_GROK=0 lá?)', [json.applied, registries.length]));
+  return { state: 'ok', results: [{ id: 'grok-registry', ok }] };
+}
+
 /** Repete uma rodada com espera: fora do ar, de 2 em 2 s; recusada (recurso desligado), a cada minuto. */
 async function waitLoop(roundFn: () => Promise<RoundResult>): Promise<never> {
   for (;;) {
@@ -343,7 +390,7 @@ async function main(): Promise<void> {
   const claudeBin = runnableClaudeBin(process.env);
   const cli = claudeBin ? createCliRunner(claudeBin) : undefined;
   const post = httpPost(parsed.port);
-  const log = (line: string) => console.log(`[codex-bridge] ${line}`);
+  const log = (line: string) => console.log(`[bridge] ${line}`);
   log(
     bin
       ? tr('Entregando as mensagens do Habblaud (http://127.0.0.1:{0}) às sessões do Codex com {1}, e começando os agentes novos pedidos no escritório. Ctrl+C para parar.', [parsed.port, bin])
@@ -373,10 +420,33 @@ async function main(): Promise<void> {
   // Agentes novos desligados no Habblaud (sem HABBLAUD_PTY=1): pergunta de novo só a cada minuto.
   let spawnRetryAt = 0;
   let spawned: RoundResult = { state: 'ok', results: [] };
+  // Registro do Grok: as pastas do host (revistas a cada minuto), o conferidor de processos e o estado para o log.
+  const grokLive = createLivenessCheck();
+  const grokCounts = new Map<string, number>();
+  let grokDirs: string[] = [];
+  let grokDirsAt = 0;
+  let grokRetryAt = 0;
+  let grokLast = '';
   for (;;) {
     if (Date.now() >= spawnRetryAt) {
       spawned = await spawnRound(post, open, log, undefined, undefined, cli);
       if (spawned.state === 'refused') spawnRetryAt = Date.now() + REFUSED_RETRY_MS;
+    }
+    if (Date.now() >= grokDirsAt) {
+      grokDirs = grokDisabled(process.env) ? [] : discoverGrokDirs(process.env);
+      grokDirsAt = Date.now() + GROK_DIRS_REFRESH_MS;
+    }
+    if (grokDirs.length && Date.now() >= grokRetryAt) {
+      const g = await grokRegistryRound(post, grokDirs, (dir) => readLiveSessions(dir, grokLive), log, grokCounts);
+      const text =
+        g.state === 'refused'
+          ? tr('o Habblaud recusou o registro do Grok ({0}{1}): Habblaud antigo ou sem o Grok; tento de novo a cada minuto.', [g.status, g.error ? `: ${g.error}` : ''])
+          : g.state === 'ok'
+            ? tr('registro do Grok: as sessões abertas de {0} vão ao Habblaud a cada {1} s (PIDs conferidos aqui).', [grokDirs.join(', '), POLL_MS / 1_000])
+            : '';
+      if (g.state === 'refused') grokRetryAt = Date.now() + REFUSED_RETRY_MS;
+      if (text && text !== grokLast) log(text);
+      if (text) grokLast = text;
     }
     const r = run ? await round(post, run, log) : spawned;
     const state =
@@ -399,7 +469,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((err: unknown) => {
-    console.error(err instanceof FatalError ? tr('[codex-bridge] Erro: {0}', [err.message]) : tr('[codex-bridge] Erro inesperado: {0}', [String(err)]));
+    console.error(err instanceof FatalError ? tr('[bridge] Erro: {0}', [err.message]) : tr('[bridge] Erro inesperado: {0}', [String(err)]));
     process.exitCode = 1;
   });
 }

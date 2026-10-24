@@ -19,9 +19,10 @@
 //    Contas do Grok (~/.grok*, GROK_HOME ou HABBLAUD_GROK_DIRS; HABBLAUD_GROK=0 desliga): SOMENTE sessions/ de cada
 //    uma, somente leitura, em /grok/<conta>/sessions — nunca auth.json, config.toml, a memória nem os logs. O
 //    active_sessions.json (as sessões abertas) fica de fora: o Grok o troca de inode a cada escrita e uma montagem de
-//    arquivo ficaria presa na cópia antiga; no container, sessão aberta = updates.jsonl modificado nos últimos 30 min
-//    ou os hooks do Grok (npm run grok:install). Vão em HABBLAUD_GROK_DIRS e, com `provider: 'grok'`, em
-//    HABBLAUD_ACCOUNTS.
+//    arquivo ficaria presa na cópia antiga (e os PIDs são do host). Quem o leva ao container é o auxiliar do host
+//    (npm run bridge, scripts/codex-bridge.ts), em POST /api/grok/registry, com os PIDs conferidos; sem ele, sessão
+//    aberta = updates.jsonl modificado nos últimos 30 min ou os hooks do Grok (npm run grok:install). Vão em
+//    HABBLAUD_GROK_DIRS e, com `provider: 'grok'`, em HABBLAUD_ACCOUNTS.
 // 3. Migra o que sobrou do nome antigo (CodeTown, até a 0.3.2): ~/.codetown vira ~/.habblaud, o container
 //    `codetown` e a rede codetown_default saem e, se o volume novo ainda não existe, os dados de
 //    codetown_codetown-data são copiados para ele (o antigo fica, para apagar à mão). Avisa de CODETOWN_*
@@ -46,7 +47,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AccountInfo, SourceInfo } from '../shared/types';
 import { codexDirsRefused, detectAccounts, discoverClaudeDirs, type DetectedAccount } from '../server/accounts/detect';
 import { detectCodexAccounts, discoverCodexDirs } from '../server/sources/codex/accounts';
-import { detectGrokAccounts, discoverGrokDirs } from '../server/sources/grok/accounts';
+import { detectGrokAccounts, discoverGrokDirs, grokDisabled } from '../server/sources/grok/accounts';
 import { describeStateMigration, LEGACY_NAME, legacyEnvWarning, migrateLegacyStateDir } from '../server/legacy';
 import { makeClaudeRunner, MIN_CLAUDE_VERSION, readPackageVersion, updateInstalledMods, type ModUpdateResult } from './mod-install';
 import { tr } from '../shared/i18n';
@@ -255,11 +256,7 @@ export function codexDisabled(env: NodeJS.ProcessEnv): boolean {
   return !!v && !/^(1|true|yes|sim|on)$/i.test(v);
 }
 
-/** HABBLAUD_GROK desligado (0, false, off, no) no ambiente de quem roda o docker:up. */
-export function grokDisabled(env: NodeJS.ProcessEnv): boolean {
-  const v = env.HABBLAUD_GROK?.trim();
-  return !!v && !/^(1|true|yes|sim|on)$/i.test(v);
-}
+export { grokDisabled };
 
 /**
  * Monta só sessions/ de cada pasta do Grok (as que existirem), em /grok/<id>. `accounts` vem de detectGrokAccounts(dirs),
@@ -762,7 +759,7 @@ async function up(opts: Options, port: number): Promise<void> {
   for (const m of grokMounts) {
     say(tr('Grok {0} ({1}): monta sessions de {2}, somente leitura.', [m.account.short, m.account.id, tildify(m.hostDir)]));
   }
-  if (grokMounts.length) say(tr('  No container, sessão aberta do Grok = conversa modificada nos últimos 30 min ou os hooks do Grok (npm run grok:install).'));
+  if (grokMounts.length) say(tr('  No container, as sessões abertas do Grok vêm do auxiliar do host (npm run bridge, que confere os PIDs); sem ele, conversa modificada nos últimos 30 min ou os hooks do Grok (npm run grok:install).'));
 
   migrateStateDir();
   const usageDir = ensureUsageDir();
