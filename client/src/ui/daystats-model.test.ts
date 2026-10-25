@@ -33,20 +33,25 @@ describe('Meu dia com o Codex', () => {
   it('custo só do Claude Code: a conta do Codex mostra tokens, sem custo', () => {
     const cards = accountCards(
       [acc('.claude', { ms: ms({ working: H }), counts: counts({ tokensIn: 10, costUSD: 1.5 }) }), acc('.codex', { ms: ms({ working: H }), counts: counts({ tokensIn: 2_000_000 }) })],
-      (id) => id === '.codex',
+      (id) => (id === '.codex' ? 'codex' : 'claude'),
     );
     expect(cards.map((c) => [c.id, c.codex, c.cost, c.tokens])).toEqual([
       ['.claude', false, 'US$ 1,50', '10'],
       ['.codex', true, null, '2 M'],
     ]);
+    // Grok: também sem custo (chip vazado com o provider dele).
+    const grok = accountCards([acc('.grok', { ms: ms({ working: H }), counts: counts({ tokensIn: 100, costUSD: 1 }) })], () => 'grok');
+    expect(grok[0]).toMatchObject({ codex: false, provider: 'grok', cost: null, tokens: '100' });
     // Sem a função, ninguém é do Codex (como antes).
     expect(accountCards([acc('.codex', { ms: ms({ working: H }) })])[0]).toMatchObject({ codex: false, cost: '—' });
   });
 
   it('dica do custo diz que o Codex não grava custo', () => {
     const day = (c: Partial<DayStats['totals']['counts']>) => ({ totals: { ...totals(), counts: counts(c), waitWallMs: 0 }, waits: [] }) as unknown as DayStats;
-    expect(highlights(day({ tokensIn: 5, costUSD: 2 }), clock, true).costHint).toBe('Só do Claude Code: o Codex não grava custo, só tokens');
-    expect(highlights(day({ tokensIn: 5 }), clock, true).costHint).toBe('O Codex não grava custo, só tokens');
+    expect(highlights(day({ tokensIn: 5, costUSD: 2 }), clock, ['Codex']).costHint).toBe('Só do Claude Code: o Codex não grava custo, só tokens');
+    expect(highlights(day({ tokensIn: 5 }), clock, ['Codex']).costHint).toBe('O Codex não grava custo, só tokens');
+    expect(highlights(day({ tokensIn: 5 }), clock, ['Codex', 'Grok']).costHint).toBe('O Codex e o Grok não gravam custo, só tokens');
+    expect(highlights(day({ tokensIn: 5, costUSD: 2 }), clock, ['Grok']).costHint).toBe('Só do Claude Code: o Grok não grava custo, só tokens');
     expect(highlights(day({ tokensIn: 5, costUSD: 2 }), clock).costHint).toBe('Custo calculado pelo próprio Claude Code');
   });
 });

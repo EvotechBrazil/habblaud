@@ -1,0 +1,183 @@
+// Rotas dos eventos dos hooks do Grok (POST /api/grok/events) e do registro das sessões abertas mandado pelo auxiliar
+// do host (POST /api/grok/registry) pelas rotas de verdade (guard e app): repassam à fonte do Grok ao vivo (um falso)
+// com a conta certa (pela pasta GROK_HOME), só com Host local, só POST com JSON; sem a fonte, {ok: false}. Dados
+// sintéticos.
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it } from 'vitest';
+import { AccountsService } from '../accounts/service';
+import { createApiHandler } from '../http/app';
+import { createRequestGuard } from '../http/guard';
+import { Hub } from '../http/sse';
+import { setQuiet } from '../log';
+import { NameStore } from '../model/names';
+import { Office } from '../model/office';
+import type { GrokLive } from '../sources/grok/live';
+import { tempDir } from '../test/fixtures';
+import { request } from '../test/permission-server';
+import type { ActiveSession } from '../sources/grok/files';
+import { grokAccountOf, parseGrokEvent, parseGrokRegistry, REGISTRY_MAX_SESSIONS } from './http';
+
+setQuiet(true);
+
+const EVENT = { session_id: '0199b0c0-1234-7abc-8def-0123456789ab', hook_event_name: 'UserPromptSubmit', cwd: '/p/loja', prompt: 'oi' };
+
+let close: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  await close?.();
+  close = undefined;
+});
+
+async function serve(live?: GrokLive): Promise<{ base: string; accounts: AccountsService }> {
+  const tmp = tempDir();
+  const office = new Office({ names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [], sources: () => [], accountName: () => undefined });
+  const hub = new Hub(office, { throttleMs: 10 });
+  const accounts = new AccountsService({ dirs: [], home: tmp.dir, env: {}, onChange: () => {} });
+  // Conta do Grok desambiguada (".grok~2"): o caminho do host é o que vale.
+  accounts.setProviderAccounts('grok', [
+    { dir: '/montada/a', detected: { id: '.grok', configDir: '/Users/x/.grok', short: 'G', name: 'Grok G', color: '#000' } },
+    { dir: '/montada/b', detected: { id: '.grok', configDir: '/Volumes/y/.grok', short: 'K', name: 'Grok K', color: '#111' } },
+  ]);
+  const api = createApiHandler({ office, hub, accounts, sources: () => [], version: 't', inDocker: false, grokLive: live });
+  const guard = createRequestGuard({ allowedHosts: new Set(['habblaud.lan']) });
+  const server = http.createServer((req, res) => {
+    if (guard(req, res)) return;
+    if (!api(req, res, new URL(req.url ?? '/', 'http://x'))) res.writeHead(404).end();
+  });
+  await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+  close = () =>
+    new Promise((ok) => {
+      hub.stop();
+      server.closeAllConnections();
+      server.close(() => {
+        tmp.cleanup();
+        ok();
+      });
+    });
+  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, accounts };
+}
+
+describe('POST /api/grok/events', () => {
+  it('repassa o evento à fonte do Grok com a conta da pasta GROK_HOME (ou a do hook) e devolve {ok}', async () => {
+    const calls: Array<[string | undefined, Record<string, unknown>]> = [];
+    const { base } = await serve({
+      applyHookEvent(account, input) {
+        calls.push([account, input]);
+        return input.hook_event_name !== 'Nada';
+      },
+      applyRegistry: () => false,
+      applyUsage: () => false,
+    });
+    let r = await request(base, '/api/grok/events', { method: 'POST', body: { account: '.grok', grokHome: '/Volumes/y/.grok', event: EVENT } });
+    expect([r.status, r.json]).toEqual([200, { ok: true }]);
+    expect(calls[0]).toEqual(['.grok~2', EVENT]);
+    r = await request(base, '/api/grok/events', { method: 'POST', body: { account: '.grok', event: { ...EVENT, hook_event_name: 'Nada' } } });
+    expect([r.status, r.json]).toEqual([200, { ok: false }]);
+    expect(calls[1][0]).toBe('.grok');
+    // Sem conta nem pasta: a fonte decide.
+    r = await request(base, '/api/grok/events', { method: 'POST', body: { event: EVENT } });
+    expect(r.status).toBe(200);
+    expect(calls[2][0]).toBeUndefined();
+  });
+
+  it('sem a fonte do Grok: {ok: false}; corpo inválido: 400; só POST; só Host local; /api/health conta a rota', async () => {
+    const { base } = await serve();
+    let r = await request(base, '/api/grok/events', { method: 'POST', body: { event: EVENT } });
+    expect([r.status, r.json]).toEqual([200, { ok: false }]);
+    r = await request(base, '/api/grok/events', { method: 'POST', body: { event: { nada: 1 } } });
+    expect(r.status).toBe(400);
+    r = await request(base, '/api/grok/events');
+    expect(r.status).toBe(405);
+    r = await request(base, '/api/grok/events', { method: 'POST', body: { event: EVENT }, headers: { host: 'habblaud.lan' } });
+    expect(r.status).toBe(403);
+    r = await request(base, '/api/health');
+    expect(r.json).toMatchObject({ grokEvents: false, codexEvents: false });
+  });
+
+  it('parseGrokEvent e grokAccountOf (funções puras)', () => {
+    expect(parseGrokEvent({ account: '.grok', grokHome: '/Users/x/.grok', event: EVENT })).toEqual({ account: '.grok', grokHome: '/Users/x/.grok', event: EVENT });
+    expect(parseGrokEvent({ event: EVENT, account: '', grokHome: 'relativa' })).toEqual({ event: EVENT, grokHome: 'relativa' });
+    expect(() => parseGrokEvent({ event: 'x' })).toThrow();
+    const entries = [
+      { id: '.grok', provider: 'grok' as const, dir: '/montada/a', detected: { id: '.grok', configDir: '/Users/x/.grok', short: 'G', name: 'Grok', color: '#000' } },
+      { id: '.grok~2', provider: 'grok' as const, dir: '/montada/b', detected: { id: '.grok~2', configDir: '/Volumes/y/.grok', short: 'K', name: 'Grok K', color: '#111' } },
+    ];
+    expect(grokAccountOf(entries, '.grok', '/Volumes/y/.grok/')).toBe('.grok~2');
+    expect(grokAccountOf(entries, '.grok', '/montada/a')).toBe('.grok');
+    expect(grokAccountOf(entries, '.grok', 'relativa')).toBe('.grok');
+    expect(grokAccountOf(entries, undefined, '/nao/existe')).toBeUndefined();
+  });
+});
+
+describe('POST /api/grok/registry', () => {
+  const RAW = { session_id: EVENT.session_id, pid: 42, pid_start: 1792690903062241, cwd: '/p/loja', opened_at: '2026-10-22T17:41:43.625Z' };
+  const PARSED: ActiveSession = { sessionId: EVENT.session_id, pid: 42, pidStart: 1792690903062241, cwd: '/p/loja', openedAt: Date.parse('2026-10-22T17:41:43.625Z') };
+
+  it('repassa cada lista à fonte do Grok com a conta da pasta GROK_HOME; entradas inválidas ficam de fora; {ok, applied}', async () => {
+    const calls: Array<[string | undefined, readonly ActiveSession[]]> = [];
+    const { base } = await serve({
+      applyHookEvent: () => false,
+      applyRegistry(account, sessions) {
+        calls.push([account, sessions]);
+        return account === '.grok~2';
+      },
+      applyUsage: () => false,
+    });
+    let r = await request(base, '/api/grok/registry', {
+      method: 'POST',
+      body: { registries: [{ grokHome: '/Volumes/y/.grok', sessions: [RAW, { session_id: 'x', pid: 1, cwd: '/p' }] }, { grokHome: '/nao/montada', sessions: [] }] },
+    });
+    expect([r.status, r.json]).toEqual([200, { ok: false, applied: 1 }]);
+    expect(calls).toEqual([
+      ['.grok~2', [PARSED]],
+      [undefined, []],
+    ]);
+    // Lista vazia também vale (é o sinal de que o auxiliar está no ar e nenhuma sessão está aberta).
+    r = await request(base, '/api/grok/registry', { method: 'POST', body: { registries: [{ grokHome: '/Users/x/.grok', sessions: [] }] } });
+    expect(r.json).toEqual({ ok: false, applied: 0 });
+    expect(calls[2]).toEqual(['.grok', []]);
+  });
+
+  it('a cota (`usage`) vai junto para a conta certa; inválida, é ignorada e a lista vale do mesmo jeito', async () => {
+    const usages: Array<[string | undefined, unknown]> = [];
+    const { base } = await serve({
+      applyHookEvent: () => false,
+      applyRegistry: (account) => account === '.grok',
+      applyUsage(account, usage) {
+        usages.push([account, usage]);
+        return true;
+      },
+    });
+    const USAGE = { fetchedAt: 1_700_000_000_000, weeklyUsedPercent: 15, periodStart: 1, periodEnd: 2, plan: 'SuperGrok Heavy' };
+    let r = await request(base, '/api/grok/registry', { method: 'POST', body: { registries: [{ grokHome: '/Users/x/.grok', sessions: [], usage: USAGE }] } });
+    expect([r.status, r.json]).toEqual([200, { ok: true, applied: 1 }]);
+    expect(usages).toEqual([['.grok', USAGE]]);
+    r = await request(base, '/api/grok/registry', { method: 'POST', body: { registries: [{ grokHome: '/Users/x/.grok', sessions: [], usage: { weeklyUsedPercent: 'muito' } }] } });
+    expect([r.status, r.json]).toEqual([200, { ok: true, applied: 1 }]);
+    expect(usages).toHaveLength(1);
+  });
+
+  it('sem a fonte do Grok: {ok: false, applied: 0}; corpo inválido: 400; só POST; só Host local', async () => {
+    const { base } = await serve();
+    let r = await request(base, '/api/grok/registry', { method: 'POST', body: { registries: [{ grokHome: '/Users/x/.grok', sessions: [RAW] }] } });
+    expect([r.status, r.json]).toEqual([200, { ok: false, applied: 0 }]);
+    r = await request(base, '/api/grok/registry', { method: 'POST', body: { sessions: [RAW] } });
+    expect(r.status).toBe(400);
+    r = await request(base, '/api/grok/registry', { method: 'POST', body: { registries: [{ grokHome: '/Users/x/.grok' }] } });
+    expect(r.status).toBe(400);
+    r = await request(base, '/api/grok/registry');
+    expect(r.status).toBe(405);
+    r = await request(base, '/api/grok/registry', { method: 'POST', body: { registries: [] }, headers: { host: 'habblaud.lan' } });
+    expect(r.status).toBe(403);
+  });
+
+  it('parseGrokRegistry (função pura): chaves do Grok ou normalizadas, limites', () => {
+    expect(parseGrokRegistry({ registries: [{ account: '.grok', grokHome: '/Users/x/.grok', sessions: [RAW, PARSED] }] })).toEqual([{ account: '.grok', grokHome: '/Users/x/.grok', sessions: [PARSED, PARSED] }]);
+    expect(parseGrokRegistry({ registries: [{ sessions: [], usage: { fetchedAt: 5, weeklyUsedPercent: 15, plan: 'X' } }] })).toEqual([{ sessions: [], usage: { fetchedAt: 5, weeklyUsedPercent: 15, plan: 'X' } }]);
+    expect(parseGrokRegistry({ registries: [{ sessions: [], usage: null }] })).toEqual([{ sessions: [] }]);
+    expect(parseGrokRegistry({ registries: [] })).toEqual([]);
+    expect(() => parseGrokRegistry({})).toThrow();
+    expect(() => parseGrokRegistry({ registries: [{ sessions: 'x' }] })).toThrow();
+    expect(() => parseGrokRegistry({ registries: [{ sessions: new Array(REGISTRY_MAX_SESSIONS + 1).fill(RAW) }] })).toThrow();
+  });
+});

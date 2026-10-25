@@ -1,0 +1,26 @@
+{
+  "info": {
+    "id": "0199b0c0-0000-7000-8000-000000000001",
+    "cwd": "/projetos/loja"
+  },
+  "agent_id": "ag1.0000000000000000000000000000000a",
+  "attempt_id": "at1.0000000000000000000000000000000b",
+  "session_summary": "",
+  "created_at": "2026-09-12T17:55:54.883677Z",
+  "updated_at": "2026-09-12T17:56:09.233186Z",
+  "num_messages": 22,
+  "num_chat_messages": 12,
+  "current_model_id": "grok-4.6",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "session_kind": "headless",
+  "git_root_dir": "/projetos/loja/",
+  "head_branch": "main",
+  "request_id": "00000000-0000-4000-8000-00000000000c",
+  "grok_home": "/home/fulano/.grok",
+  "last_active_at": "2026-09-12T17:56:09.233186Z",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "medium",
+  "generated_title": "Rodar os testes da loja"
+}

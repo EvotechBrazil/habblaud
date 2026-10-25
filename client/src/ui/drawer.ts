@@ -41,7 +41,7 @@ import {
 import { access } from '../net/access';
 import { PermissionCard } from './permission';
 import { canRenameRoom } from './roomrename';
-import { accountChipLabel, accountProvider, CODEX_LIVE_HINT, codexApprovalLabel, providerOf } from './provider';
+import { accountChipLabel, accountProvider, CODEX_LIVE_HINT, codexApprovalLabel, GROK_LIVE_HINT, PROVIDER_NAME, providerOf } from './provider';
 import { ptyControllable } from './ptyapi';
 import { createAgentRow, updateAgentRow } from './rows';
 import { SocialSection } from './social';
@@ -207,6 +207,8 @@ class AgentView {
   private accEmail: HTMLElement;
   /** Dica dos hooks do Codex (ao vivo e aprovar pelo escritório), na gaveta de um agente do Codex. */
   private codexHint: HTMLElement;
+  /** Dica dos hooks do Grok (ao vivo), na gaveta de um agente do Grok. */
+  private grokHint: HTMLElement;
   private roomBtn: HTMLButtonElement;
   private roomName: HTMLElement;
   private gone: HTMLElement;
@@ -402,6 +404,7 @@ class AgentView {
     ]);
     const statsSec = section(tr('Estatísticas'), this.stats.el);
     this.codexHint = h('p', { class: 'ui-codex-hint', hidden: true }, ...richText(CODEX_LIVE_HINT));
+    this.grokHint = h('p', { class: 'ui-codex-hint', hidden: true }, ...richText(GROK_LIVE_HINT));
 
     this.el = h(
       'div',
@@ -425,6 +428,7 @@ class AgentView {
       this.timelineSec.el,
       statsSec.el,
       this.codexHint,
+      this.grokHint,
     );
   }
 
@@ -531,6 +535,7 @@ class AgentView {
     const room = this.ctx.store.room(a.roomId);
     const provider = providerOf(a);
     const codex = provider === 'codex';
+    const external = provider !== 'claude';
 
     updateAvatar(this.avatar, a, 'lg');
     setStyleVar(this.avatar, '--acc', account?.color ?? '#8b98b3');
@@ -544,8 +549,8 @@ class AgentView {
     updateAccountChip(this.accChip, account, a.account, a.provider);
     setText(this.accName, account?.name ?? a.account);
     updateProviderTag(this.accProv, provider, account?.name ?? '');
-    // E-mail (Claude Code) ou, no Codex (sem e-mail), o plano.
-    const accSub = account?.email ?? (codex && account?.plan ? tr('plano {0}', [account.plan]) : '');
+    // E-mail (Claude Code) ou, no Codex e no Grok (sem e-mail), o plano.
+    const accSub = account?.email ?? (external && account?.plan ? tr('plano {0}', [account.plan]) : '');
     setText(this.accEmail, accSub);
     setHidden(this.accEmail, !accSub);
     setText(this.roomName, room?.name ?? a.roomId);
@@ -573,17 +578,17 @@ class AgentView {
     setHidden(this.alert, !waiting || this.perm.visible);
     if (waiting) {
       const accName = account?.name ?? a.account;
-      // Codex: "Vá ao Codex (Conta X)"; sem repetir quando a conta já se chama "Codex".
-      const where = codex ? tr('ao Codex{0}', [/codex/i.test(accName) ? '' : ` (${accName})`]) : tr('ao terminal da {0}', [accName]);
+      // Codex/Grok: "Vá ao Codex (Conta X)"; sem repetir quando a conta já se chama "Codex".
+      const where = external ? tr('ao {0}{1}', [PROVIDER_NAME[provider], accName.toLowerCase().includes(PROVIDER_NAME[provider].toLowerCase()) ? '' : ` (${accName})`]) : tr('ao terminal da {0}', [accName]);
       setText(this.alertText, tr('Vá {0} em {1} para responder{2}', [where, room?.name ?? tr('seu projeto'), a.waitingFor ? `: ${a.waitingFor}` : '.']));
     }
-    // Perguntas do AskUserQuestion (só leitura): o Codex não pergunta pelo escritório.
-    const asking = waiting && !codex && a.activity?.kind === 'ask' ? a.activity : undefined;
+    // Perguntas do AskUserQuestion (só leitura): o Codex e o Grok não perguntam pelo escritório.
+    const asking = waiting && !external && a.activity?.kind === 'ask' ? a.activity : undefined;
     this.renderQuestions(asking);
     // Sem o pedido no escritório: dá para responder por aqui com o plugin (só com a trava local, como o cartão). O Codex
     // não responde perguntas pelo escritório.
     const answerable =
-      !codex && !!asking?.questions?.length && !this.perm.visible && !this.ctx.store.mock && !!this.ctx.store.snapshot?.meta.terminal && access().permissions;
+      !external && !!asking?.questions?.length && !this.perm.visible && !this.ctx.store.mock && !!this.ctx.store.snapshot?.meta.terminal && access().permissions;
     setHidden(this.alertAnswerHint, !answerable);
 
     // Esperando o shell.
@@ -661,6 +666,7 @@ class AgentView {
 
     // Codex: como ter o ao vivo e as aprovações por aqui (o servidor ainda não diz se os hooks dele estão ligados).
     setHidden(this.codexHint, !codex || a.kind !== 'main' || !live || this.ctx.store.replaying);
+    setHidden(this.grokHint, provider !== 'grok' || a.kind !== 'main' || !live || this.ctx.store.replaying);
   }
 
   /** Lista as perguntas pendentes com as opções, só para leitura (sem o pedido no escritório, a resposta é no Claude Code). */
@@ -720,7 +726,7 @@ class AgentView {
             ? tr('O agente já saiu do escritório.')
             : kind === 'ao vivo'
               ? tr('Ver a conversa desta sessão como no {0}, ao vivo{1} (T)', [
-                  provider === 'codex' ? 'Codex' : tr('terminal do Claude Code'),
+                  provider !== 'claude' ? PROVIDER_NAME[provider] : tr('terminal do Claude Code'),
                   this.pty.enabled && ptyControllable(this.last) ? tr('; "Assumir daqui" continua nela aqui') : '',
                 ])
               : kind === 'interativo'

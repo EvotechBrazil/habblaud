@@ -5,7 +5,7 @@
 <h1 align="center">Habblaud</h1>
 
 <p align="center">
-  <b>O escritório virtual dos seus agentes do Claude Code (e do Codex).</b><br />
+  <b>O escritório virtual dos seus agentes do Claude Code (e do Codex e do Grok).</b><br />
   Cada projeto vira uma sala, cada agente vira um personagem em pixel art que mostra, em tempo real, o que está fazendo.
 </p>
 
@@ -226,6 +226,27 @@ Depois, **abra o Codex e aprove os hooks do Habblaud em `/hooks`**: o Codex só 
 aprova (o Habblaud nunca grava essa aprovação). Com o Habblaud no Docker, para mandar mensagens às sessões do Codex
 deixe também `npm run codex:bridge` rodando no Mac (veja [Codex](#codex)).
 
+### 5. Grok no escritório (opcional)
+
+Se você usa o **Grok Build CLI** da xAI (a CLI `grok`), as sessões dele também entram no escritório: cada projeto é
+uma sala (a mesma do Claude Code e do Codex naquela pasta) e cada sessão, um personagem com o selo **GROK**. O
+Habblaud acha sozinho a pasta do Grok (`~/.grok`, `GROK_HOME` ou `~/.grok*`) e lê os arquivos de sessão, sem instalar
+nada. Para ver o Grok **ao vivo** (cada passo na hora, a mão levantada quando ele pede permissão), grave o hook:
+
+```bash
+npm run grok:install       # grava ~/.grok/hooks/habblaud.json (um arquivo só do Habblaud; os outros hooks ficam)
+npm run grok:status        # confere
+```
+
+Não há nada para aprovar: os hooks globais do Grok (`~/.grok/hooks/*.json`) são sempre confiáveis. A cota semanal
+da conta aparece no cartão sozinha (o Grok só tem essa janela; veja [Grok](#grok)). O que ainda não existe para o
+Grok: aprovar pelo escritório e mandar mensagens.
+
+Com o Habblaud **no Docker**, deixe também `npm run bridge` rodando no Mac (o mesmo auxiliar do Codex, que antes se
+chamava `codex:bridge`): é ele que diz ao container quais sessões do Grok estão abertas, conferindo os processos, e
+quanto da cota semanal já foi usado.
+Sem ele, uma sessão do Grok parada há mais de 30 minutos sai do escritório.
+
 ### Abrir no celular (opcional)
 
 Por padrão o Habblaud só aceita conexões do próprio computador. Para abrir no celular (no mesmo Wi-Fi), com Docker:
@@ -346,6 +367,7 @@ npm run docker:up        # tira o container codetown e copia os dados do volume 
 ```bash
 npm run mod:uninstall                       # tira o mod, os plugins de permissões e de mensagens e o marketplace
 npm run codex:uninstall                     # tira os hooks do Habblaud do Codex (os outros ficam)
+npm run grok:uninstall                      # apaga ~/.grok/hooks/habblaud.json (os outros hooks do Grok ficam)
 npm run docker:down                         # para o container
 docker volume rm habblaud_habblaud-data     # apaga os dados do container (nomes, salas, linha do tempo e estatísticas)
 docker image rm habblaud:local              # apaga a imagem
@@ -606,6 +628,43 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   pouco para ir embora depois que você fecha o terminal.
 - Conversas da nuvem do ChatGPT (sem arquivo no computador) não aparecem. `HABBLAUD_CODEX=0` desliga o Codex.
 
+### Grok
+
+As sessões do **Grok Build CLI** (xAI) aparecem como as do Claude Code e do Codex: personagem, sala do projeto,
+atividade, tarefas (`plan` e `todo_write`), terminal e histórico, e o **Meu dia** (só tokens: o Grok não grava custo).
+O chip da conta do Grok é vazado e leva o selo **GROK**.
+
+- **Sem instalar nada**, o Habblaud lê o que o próprio Grok grava: as sessões abertas em `~/.grok/active_sessions.json`
+  (com o PID conferido, como no registro do Claude Code) e cada conversa em `~/.grok/sessions/<projeto>/<id>/`
+  (`updates.jsonl`, o fluxo de eventos; `summary.json`, o título gerado, o modelo e a branch). O Grok grava cada
+  passo quando ele acontece, mas nunca grava "esperando você".
+- **Com o hook** (`npm run grok:install`), o Grok avisa o Habblaud a cada passo e, pelo evento `Notification`
+  (`permission_prompt`), levanta a mão do personagem quando pede permissão; `idle_prompt` a baixa. O hook só observa:
+  nunca decide nada, sai na hora se o Habblaud estiver parado e tem prazo curto (o Grok roda hooks em primeiro
+  plano). Ele fica em `~/.grok/hooks/habblaud.json`, um arquivo só do Habblaud: os outros hooks do Grok e o
+  `config.toml` nunca são tocados, e não há passo de aprovação (os hooks globais do Grok são sempre confiáveis).
+- **Cota semanal:** o Grok não tem sessão de 5 horas, só o período semanal do plano, e não grava um arquivo de uso.
+  Mas, enquanto alguma sessão roda, ele consulta a cobrança a cada poucos minutos e registra a resposta no log dele
+  (`~/.grok/logs/unified.jsonl`: percentual usado, início e fim do período e o plano). O Habblaud lê só o fim desse
+  log e mostra no cartão da conta a barra da semana, o reinício e o plano; a barra de 5 h não existe. Como o número
+  só se renova com sessão rodando, o cartão mostra a idade da leitura, como no Codex. Fora do Docker a fonte lê o
+  log direto; no Docker, é o auxiliar `npm run bridge` que leva o número ao container (o log não é montado).
+- **O que não existe (ainda):** aprovar pelo escritório (o Grok não tem um hook de permissão que espere resposta de
+  fora, e normalmente roda com `permission_mode = "always-approve"`) e mandar mensagens (o candidato é `grok -p
+  "texto" --resume <id>`, ainda não validado numa sessão aberta). Perguntas do Grok são respondidas no próprio Grok.
+- **Subagentes** do Grok não têm arquivo próprio: entram como número nas estatísticas e como a atividade "Delegando".
+- **No Docker**, só `~/.grok/sessions` é montado (somente leitura): o `active_sessions.json` fica de fora porque o
+  Grok o troca de arquivo a cada escrita (uma montagem de arquivo ficaria presa na cópia antiga) e os PIDs dele são
+  do Mac, não do container. Quem leva a lista das sessões abertas ao container é o auxiliar do host, `npm run bridge`
+  (o antigo `codex:bridge`): a cada 2 segundos ele lê o arquivo, confere cada processo (PID vivo e `pid_start`, para
+  não confundir um PID reaproveitado) e manda a lista em `POST /api/grok/registry`. Assim uma sessão TUI do Grok
+  parada há horas continua no escritório e some quando o processo fecha. Se o auxiliar parar, o container volta ao
+  modo sem registro: sessão aberta = conversa modificada nos últimos 30 minutos, ou uma sessão que o hook abriu
+  (`SessionStart`) e ainda não fechou (`SessionEnd`). Montar o `~/.grok` inteiro não resolveria: exporia o
+  `auth.json` ao container e os PIDs continuariam sem conferência.
+- Um `updates.jsonl` pode passar de 300 MB: o Habblaud lê o fim ao abrir e o começo em segundo plano, só até 32 MB (os
+  números de uma sessão enorme contam só a parte final). `HABBLAUD_GROK=0` desliga o Grok.
+
 ### GitHub no escritório
 
 O que os agentes fazem no GitHub anima a sala do projeto, sem token e sem acessar a internet: o Habblaud lê nos
@@ -656,8 +715,9 @@ Quer ver o escritório cheio sem ter sessões abertas?
 ## Contas e uso (5 horas e semanal)
 
 > As contas do **Codex** entram sozinhas (cada pasta `~/.codex*` ou `CODEX_HOME` é uma conta; a letra vem de um
-> `alias x='CODEX_HOME=… codex'`, se houver) e o uso delas vem dos arquivos do Codex; veja [Codex](#codex). O resto
-> desta seção é sobre o Claude Code.
+> `alias x='CODEX_HOME=… codex'`, se houver) e o uso delas vem dos arquivos do Codex; veja [Codex](#codex). As do
+> **Grok** idem (`~/.grok*` ou `GROK_HOME`; alias com `GROK_HOME=…`), com só a cota semanal, lida do log do Grok;
+> veja [Grok](#grok). O resto desta seção é sobre o Claude Code.
 
 Se você usa mais de uma conta do Claude Code (por exemplo, um atalho `c` com `~/.claude` e um `d` com
 `CLAUDE_CONFIG_DIR=~/.claude-conta2`), o Habblaud mostra todas juntas: cada agente leva o chip da sua conta e o topo
@@ -727,6 +787,8 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
+| `HABBLAUD_GROK` | ligado | `0` desliga o Grok no escritório. |
+| `HABBLAUD_GROK_DIRS` | detecção automática | Pastas do Grok, separadas por vírgula (no lugar de `~/.grok*` e `GROK_HOME`). |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
 | `HABBLAUD_LANG` | idioma do sistema (menos inglês), senão `pt-BR` | Idioma dos textos montados pelo servidor (atividades, avisos, logs): `pt-BR`, `en`, `es` ou `fr`. A interface segue o navegador ou a escolha em Configurações › Idioma. Ver [Idiomas](#idiomas). |
 | `HABBLAUD_ACCOUNTS` | — | JSON para personalizar nome, letra ou cor, casado pelo nome da pasta da conta. Ex.: `[{"id":".claude-conta2","name":"Trabalho","short":"T","color":"#5cc97b"}]`. |
@@ -898,6 +960,8 @@ mod/      o mod do Habblaud e os plugins de permissões e de mensagens (plugins 
 | `/api/messages…` e `/api/mod/inbox…` | Mandar mensagens: a página deixa a mensagem na fila e acompanha a entrega; o plugin `habblaud-mensagens` a busca, entrega à sessão e confirma. Só com acesso local. |
 | `POST /api/codex/events` | Eventos dos hooks do Codex (sessão aberta, ferramenta, aprovação, fim do turno). Só com acesso local. |
 | `/api/codex/bridge/poll` e `/ack` | O `npm run codex:bridge` busca as mensagens para o Codex e confirma a entrega. Só com acesso local. |
+| `POST /api/grok/events` | Eventos do hook do Grok (sessão aberta, ferramenta, pedido de permissão, fim do turno). Só com acesso local. |
+| `POST /api/grok/registry` | O `npm run bridge` manda a lista das sessões abertas do Grok (`active_sessions.json`, com os processos conferidos no Mac) ao Habblaud no Docker. Só com acesso local. |
 
 Mais detalhes do servidor em [`server/README.md`](server/README.md).
 

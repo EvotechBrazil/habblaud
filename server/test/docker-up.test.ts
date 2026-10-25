@@ -8,6 +8,10 @@ import {
   codexAccountsPayload,
   codexDisabled,
   copyVolumeArgs,
+  GROK_MOUNTED_SUBDIRS,
+  grokAccountsPayload,
+  grokDisabled,
+  planGrokMounts,
   type DockerState,
   envFileKeys,
   hostTimeZone,
@@ -130,6 +134,30 @@ describe('docker-up', () => {
     expect(codexDisabled({ HABBLAUD_CODEX: 'off' })).toBe(true);
     expect(codexDisabled({ HABBLAUD_CODEX: '1' })).toBe(false);
     expect(codexDisabled({})).toBe(false);
+  });
+
+  it('Grok: monta SÓ sessions/ (somente leitura), nunca o active_sessions.json, e passa as contas com a pasta do host', () => {
+    expect([...GROK_MOUNTED_SUBDIRS]).toEqual(['sessions']);
+    const host = '/Users/fulano/.grok';
+    const exists = new Set([`${host}/sessions`, `${host}/active_sessions.json`, `${host}/auth.json`, `${host}/config.toml`, `${host}/memory`, `${host}/logs`]);
+    const grokAcc: DetectedAccount = { id: '.grok', provider: 'grok', configDir: host, short: 'G', name: 'Grok', color: '#4aa8e8' };
+    const grok = planGrokMounts([host, '/Users/fulano/.grok-vazia'], [grokAcc, { ...grokAcc, id: '.grok-vazia' }], (p) => (exists.has(slash(p)) ? `/real${slash(p)}` : undefined));
+    expect(grok.map((m) => m.binds)).toEqual([[{ source: `/real${host}/sessions`, target: '/grok/.grok/sessions' }]]);
+    expect(grokAccountsPayload(grok)).toEqual([{ id: '.grok', provider: 'grok', configDir: host, mountDir: '/grok/.grok', short: 'G', name: 'Grok', color: '#4aa8e8' }]);
+    const claude = planMounts(['/Users/fulano/.claude'], [acc('.claude')], slash);
+    const yml = renderOverride(claude, new Date(0), undefined, undefined, [], undefined, [], grok);
+    expect(yml).toContain('HABBLAUD_GROK_DIRS: "/grok/.grok"');
+    expect(yml).toContain(`source: "/real${host}/sessions"\n        target: "/grok/.grok/sessions"\n        read_only: true`);
+    for (const secret of ['active_sessions', 'auth.json', 'config.toml', 'memory', 'logs']) expect(yml).not.toContain(secret);
+    const accounts = JSON.parse(JSON.parse(/HABBLAUD_ACCOUNTS: (".*")/.exec(yml)![1]) as string) as Array<Record<string, unknown>>;
+    expect(accounts.map((a) => [a.id, a.provider])).toEqual([
+      ['.claude', undefined],
+      ['.grok', 'grok'],
+    ]);
+    expect(renderOverride(claude)).not.toContain('HABBLAUD_GROK_DIRS');
+    expect(grokDisabled({ HABBLAUD_GROK: '0' })).toBe(true);
+    expect(grokDisabled({ HABBLAUD_GROK: 'on' })).toBe(false);
+    expect(grokDisabled({})).toBe(false);
   });
 
   it('fuso do host vai para o container como TZ', () => {

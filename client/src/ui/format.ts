@@ -216,6 +216,15 @@ export function normalizeSearch(s: string): string {
 /** Nome curto do modelo: "claude-opus-5-5" -> "Opus 5.5". Mantém o original se não reconhecer. */
 export function prettyModel(model: string | undefined): string {
   if (!model) return '—';
+  // Grok: "grok-4.6" -> "Grok 4.6", "grok-4.6-build" -> "Grok 4.6 Build", "grok-code-fast-1" -> "Grok Code Fast 1".
+  const grok = /^grok-(.+)$/i.exec(model);
+  if (grok) {
+    const words = grok[1]
+      .split('-')
+      .filter(Boolean)
+      .map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()));
+    return ['Grok', ...words].join(' ');
+  }
   // Codex: "gpt-5.3-codex" -> "GPT-5.3 Codex", "gpt-5.1-codex-mini" -> "GPT-5.1 Codex Mini", "gpt-5" -> "GPT-5".
   const gpt = /^gpt-(\d+(?:\.\d+)?[a-z]?)((?:-[a-z][a-z0-9]*)*)$/i.exec(model);
   if (gpt) {

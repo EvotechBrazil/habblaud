@@ -10,6 +10,26 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Grok no escritório.** As sessões do Grok Build CLI (xAI) entram no escritório como as do Codex: personagem com o
+  chip vazado e o selo **GROK**, sala do projeto, atividade, tarefas, terminal, histórico e tokens no Meu dia (sem
+  custo). O Habblaud lê sozinho `~/.grok/active_sessions.json` e `~/.grok/sessions/*/*/updates.jsonl` (ou
+  `GROK_HOME`, `~/.grok*` e `HABBLAUD_GROK_DIRS`; `HABBLAUD_GROK=0` desliga). `npm run grok:install` grava o hook
+  (`~/.grok/hooks/habblaud.json`, só do Habblaud) para ver cada passo na hora e a mão levantada nos pedidos de
+  permissão. O cartão da conta mostra a **cota semanal** (a única janela do plano do Grok: não há sessão de 5 h), o
+  reinício e o plano, lidos no fim do log do próprio Grok (`~/.grok/logs/unified.jsonl`, onde ele registra a resposta
+  da cobrança enquanto alguma sessão roda; por isso o cartão mostra a idade da leitura). Ainda sem aprovar pelo
+  escritório nem mensagens. No Docker,
+  `npm run docker:up` monta só `sessions/` de cada pasta do Grok, e o auxiliar do host (`npm run bridge`) manda ao
+  container, a cada 2 s, a lista das sessões abertas do Grok (`active_sessions.json`, com o PID e o `pid_start`
+  conferidos no Mac, em `POST /api/grok/registry`) e a cota semanal (o log também não é montado): uma sessão TUI do
+  Grok parada há horas continua no escritório e some quando o processo fecha. Sem o auxiliar, vale a conversa
+  modificada nos últimos 30 min ou o hook.
+- **`npm run bridge`.** Nome novo do auxiliar do host para o Docker (`npm run codex:bridge` continua valendo): além
+  das mensagens ao Codex, dos agentes novos, das entregas e do ditado, ele agora leva o registro do Grok. Se você
+  roda o auxiliar como serviço, troque o comando para `npm run bridge` quando quiser; o antigo não para de funcionar.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido
