@@ -2,7 +2,8 @@
 // poucos minutos e registra a resposta no log dele, <GROK_HOME>/logs/unified.jsonl, numa linha JSON com
 // `"msg":"billing: fetched credits config"`:
 //   ctx.config.creditUsagePercent   percentual usado do período (a ÚNICA janela: o plano do Grok é semanal, sem
-//                                   sessão de 5 h);
+//                                   sessão de 5 h); AUSENTE quando é 0 (o Grok omite os campos zerados: no começo
+//                                   de cada período a linha vem sem ele);
 //   ctx.config.currentPeriod        {type: "USAGE_PERIOD_TYPE_WEEKLY", start, end} (ISO);
 //   ctx.subscriptionTier            o plano ("SuperGrok Heavy"...).
 // Este módulo lê SÓ o fim do log (ele cresce sem rotação e tem de tudo) e só essa linha. Node puro, sem dependências
@@ -54,8 +55,9 @@ function epochMs(v: unknown): number | undefined {
 }
 
 /**
- * Uma linha do unified.jsonl → a cota, se for a linha de cobrança com o percentual. Qualquer outra linha (ou JSON
- * quebrado) → undefined. O percentual é preso a 0–100.
+ * Uma linha do unified.jsonl → a cota, se for a linha de cobrança com o `config`. Qualquer outra linha (ou JSON
+ * quebrado) → undefined. O percentual é preso a 0–100; ausente vale 0 (o Grok omite os campos zerados, e é assim
+ * que a linha vem no começo de cada período, até que o `creditUsagePercent` volte a aparecer).
  */
 export function parseBillingLine(line: string): GrokUsagePost | undefined {
   if (!line.includes(BILLING_MSG)) return undefined;
@@ -68,9 +70,9 @@ export function parseBillingLine(line: string): GrokUsagePost | undefined {
   if (!j || j.msg !== 'billing: fetched credits config') return undefined;
   const ctx = rec(j.ctx);
   const config = rec(ctx?.config);
-  const percent = num(config?.creditUsagePercent);
   const fetchedAt = epochMs(j.ts);
-  if (percent === undefined || fetchedAt === undefined) return undefined;
+  if (!config || fetchedAt === undefined) return undefined;
+  const percent = num(config.creditUsagePercent) ?? 0;
   const out: GrokUsagePost = { fetchedAt, weeklyUsedPercent: Math.min(100, Math.max(0, percent)) };
   const period = rec(config?.currentPeriod);
   const start = epochMs(period?.start ?? config?.billingPeriodStart);
