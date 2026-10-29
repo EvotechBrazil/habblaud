@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountInfo } from '../../../shared/types';
-import { cardState, codexUsageNote, grokUsageNote, showsUsageAge, sourceLabel, usageMessage, usageSubtitle } from './usage';
+import { cardState, codexUsageNote, grokUsageNote, showsUsageAge, sourceLabel, usageMessage, usageSubtitle, weeklyOnly } from './usage';
 
 const MIN = 60_000;
 type Acc = Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider' | 'email' | 'plan' | 'configDir'>;
@@ -68,5 +68,19 @@ describe('cartão de uso de uma conta do Grok', () => {
     expect(grokUsageNote(codex(), 0)).toBe('');
     expect(usageSubtitle(grok({ plan: 'SuperGrok Heavy' }))).toBe('plano SuperGrok Heavy');
     expect(usageSubtitle(grok())).toBe('Grok');
+  });
+});
+
+describe('plano só com a semana (sem a janela de 5 h)', () => {
+  const weekOnly = { source: 'codex' as const, sevenDay: win, fetchedAt: 0 };
+  it('a leitura sem a janela de 5 h esconde a barra dela, no Codex (Pro Lite) e no Grok; com as duas, não', () => {
+    expect(weeklyOnly(codex({ usage: weekOnly }))).toBe(true);
+    expect(weeklyOnly({ usage: { source: 'grok', sevenDay: win, fetchedAt: 0 } })).toBe(true);
+    expect(weeklyOnly(codex({ usage: { source: 'codex', fiveHour: win, sevenDay: win, fetchedAt: 0 } }))).toBe(false);
+    expect(weeklyOnly(codex({ usage: { source: 'codex', fiveHour: win, fetchedAt: 0 } }))).toBe(false);
+    expect(weeklyOnly(codex())).toBe(false);
+    expect(cardState(codex({ usage: weekOnly }))).toBe('ok');
+    expect(codexUsageNote(codex({ usage: weekOnly }), 12 * MIN)).toBe('O plano desta conta só tem a janela semanal (o Codex não informa sessão de 5 h). O Codex só grava o uso enquanto alguma sessão roda: este número é da última leitura (há 12 min).');
+    expect(codexUsageNote(codex({ usage: { source: 'codex', noQuota: true, fetchedAt: 0 } }), 0)).toMatch(/^Na última leitura/);
   });
 });

@@ -3361,4 +3361,5 @@ export const ES: Readonly<Record<string, string>> = {
   "cota do Grok: {0}% da semana usados em {1} (plano {2})": "cuota de Grok: {0}% de la semana usado en {1} (plan {2})",
   "cota do Grok: {0}% da semana usados em {1}": "cuota de Grok: {0}% de la semana usado en {1}",
   "registro do Grok: as sessões abertas de {0} e a cota semanal vão ao Habblaud a cada {1} s (PIDs conferidos aqui).": "registro de Grok: las sesiones abiertas de {0} y la cuota semanal van a Habblaud cada {1} s (PIDs verificados aquí).",
+  "O plano desta conta só tem a janela semanal (o Codex não informa sessão de 5 h). O Codex só grava o uso enquanto alguma sessão roda: este número é da última leitura ({0}).": "El plan de esta cuenta solo tiene la ventana semanal (Codex no informa sesión de 5 h). Codex solo registra el uso mientras alguna sesión corre: este número es de la última lectura ({0}).",
 };
