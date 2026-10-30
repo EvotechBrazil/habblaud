@@ -8,7 +8,9 @@
 // a idade ("há 12 min") fica sempre à mostra. Sem cota nem créditos ("sem cota") nunca vira 0%. Não há o que
 // instalar para o uso: "Como funciona" abre a ajuda na seção do Codex. Sem Opus/Sonnet nem e-mail (só o plano).
 // Conta do Grok: só a cota semanal (o plano dele não tem sessão de 5 h), lida do log do Grok, que também só se renova
-// enquanto alguma sessão roda: a barra de 5 h fica escondida e a idade à mostra, como no Codex.
+// enquanto alguma sessão roda: a idade fica à mostra, como no Codex.
+// Plano só com a semana (Grok; Codex Pro Lite, cujo `rate_limits` traz só a janela de 10080 min): a leitura vem sem a
+// janela de 5 h e a barra dela some do cartão e da dica, em vez de ficar com "—".
 import type { AccountInfo } from '../../../shared/types';
 import type { UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
@@ -161,6 +163,11 @@ function hasWindows(a: Pick<AccountInfo, 'usage'>): boolean {
   return !!a.usage && !!(a.usage.fiveHour || a.usage.sevenDay);
 }
 
+/** Só a semana: a leitura trouxe a janela semanal sem a de 5 h (plano sem sessão de 5 h: Grok, Codex Pro Lite). */
+export function weeklyOnly(a: Pick<AccountInfo, 'usage'>): boolean {
+  return !!a.usage?.sevenDay && !a.usage.fiveHour;
+}
+
 /** Estado efetivo do cartão. */
 export function cardState(a: Pick<AccountInfo, 'usage' | 'usageStatus'>): CardState {
   // "Sem cota" vem antes: a leitura não traz janelas, mas não é "sem dados".
@@ -208,6 +215,8 @@ export function codexUsageNote(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'p
   const state = cardState(a);
   if (state === 'empty') return tr('Não precisa instalar nada: os números chegam com a próxima sessão do Codex.');
   const age = u ? relativeTime(u.fetchedAt, now) : '';
+  if (weeklyOnly(a) && state !== 'noquota')
+    return tr('O plano desta conta só tem a janela semanal (o Codex não informa sessão de 5 h). O Codex só grava o uso enquanto alguma sessão roda: este número é da última leitura ({0}).', [age]);
   if (state === 'noquota')
     return tr('Na última leitura ({0}), a conta estava sem cota nem créditos para usar (ex.: os créditos do workspace acabaram). Não é 0%: o Codex não informou as janelas. Os números voltam com a próxima sessão.', [age]);
   return tr('O Codex só grava o uso enquanto alguma sessão roda: estes números são da última leitura ({0}).', [age]);
@@ -364,10 +373,11 @@ export class UsageCards {
     const week = usage ? usageWindowView(usage.sevenDay, usage.fetchedAt, now, WEEK_MS) : null;
     const showMeters = hasWindows(a);
     setHidden(r.meters, !showMeters);
-    // Grok: só a semana (o plano dele não tem sessão de 5 h).
-    setHidden(r.five.el, grok);
+    // Plano só com a semana (Grok, Codex Pro Lite): a barra de 5 h some em vez de ficar com "—".
+    const onlyWeek = weeklyOnly(a);
+    setHidden(r.five.el, onlyWeek);
     if (usage && showMeters) {
-      if (!grok) updateMeter(r.five, five, tr('Sessão de 5 horas'));
+      if (!onlyWeek) updateMeter(r.five, five, tr('Sessão de 5 horas'));
       updateMeter(r.week, week, tr('Semana'));
     }
     r.meters.classList.toggle('is-dim', state !== 'ok');
@@ -430,8 +440,8 @@ export class UsageCards {
     rows.push([tr('Sessões abertas'), String(a.sessions)]);
     const u = a.usage;
     if (u && (u.fiveHour || u.sevenDay)) {
-      // Grok: só a semana (o plano dele não tem sessão de 5 h).
-      if (!grok) rows.push([tr('Sessão de 5 h'), five?.summary ?? '—']);
+      // Plano só com a semana (Grok, Codex Pro Lite): sem a linha de 5 h.
+      if (!weeklyOnly(a)) rows.push([tr('Sessão de 5 h'), five?.summary ?? '—']);
       rows.push([tr('Semana'), week?.summary ?? '—']);
       // Opus e Sonnet são janelas do Claude: no Codex não existem.
       const opus = codex ? null : usageWindowView(u.sevenDayOpus, u.fetchedAt, now, WEEK_MS);

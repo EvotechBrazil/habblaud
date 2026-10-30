@@ -434,8 +434,9 @@ describe('fonte do Grok: registro ilegível e sessão das fixtures', () => {
 });
 
 describe('fonte do Grok: a cota semanal (log do Grok e auxiliar do host)', () => {
-  const LINE = (percent: number, ts: string, tier = 'SuperGrok Heavy') =>
-    JSON.stringify({ ts, src: 'shell', pid: 1, lvl: 'info', msg: 'billing: fetched credits config', ctx: { config: { creditUsagePercent: percent, currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: '2026-10-21T20:05:38.827602+00:00', end: '2026-10-28T20:05:38.827602+00:00' } }, subscriptionTier: tier } });
+  // O fim do período fica no futuro (relativo ao relógio do teste): uma janela já renovada sai da leitura (rollover).
+  const LINE = (percent: number, ts: string, end: string, tier = 'SuperGrok Heavy') =>
+    JSON.stringify({ ts, src: 'shell', pid: 1, lvl: 'info', msg: 'billing: fetched credits config', ctx: { config: { creditUsagePercent: percent, currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: '2026-10-21T20:05:38.827602+00:00', end } }, subscriptionTier: tier } });
 
   it('fora do Docker, lê a cota no fim de logs/unified.jsonl da conta (a cada BILLING_POLL_MS) e registra o plano', () => {
     const ctx = setup({ checkPid: false });
@@ -447,19 +448,20 @@ describe('fonte do Grok: a cota semanal (log do Grok e auxiliar do host)', () =>
     mkdirSync(join(ctx.home.dir, 'logs'), { recursive: true });
     const log = join(ctx.home.dir, 'logs', 'unified.jsonl');
     const t1 = new Date(ctx.now() - 60_000).toISOString();
-    writeFileSync(log, LINE(15, t1) + '\n');
+    const end = new Date(ctx.now() + 3 * 86_400_000).toISOString();
+    writeFileSync(log, LINE(15, t1, end) + '\n');
     // Ainda dentro do intervalo: não relê.
     ctx.advance(1_000);
     ctx.poll();
     expect(ctx.accounts.usageView('.grok').status).toBe('disabled');
     ctx.advance(BILLING_POLL_MS);
     ctx.poll();
-    expect(ctx.accounts.usageView('.grok')).toMatchObject({ status: 'ok', usage: { source: 'grok', sevenDay: { utilization: 15, resetsAt: Date.parse('2026-10-28T20:05:38.827602+00:00') }, fetchedAt: Date.parse(t1) } });
+    expect(ctx.accounts.usageView('.grok')).toMatchObject({ status: 'ok', usage: { source: 'grok', sevenDay: { utilization: 15, resetsAt: Date.parse(end) }, fetchedAt: Date.parse(t1) } });
     expect(ctx.accounts.usageView('.grok').usage?.fiveHour).toBeUndefined();
     expect(ctx.accounts.find('.grok')?.detected.plan).toBe('SuperGrok Heavy');
     // Linha nova no log: o número acompanha.
     const t2 = new Date(ctx.now()).toISOString();
-    appendFileSync(log, LINE(16, t2) + '\n');
+    appendFileSync(log, LINE(16, t2, end) + '\n');
     ctx.advance(BILLING_POLL_MS);
     ctx.poll();
     expect(ctx.accounts.usageView('.grok').usage?.sevenDay?.utilization).toBe(16);

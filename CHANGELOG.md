@@ -30,6 +30,15 @@ do meio (0.**3**.0).
   das mensagens ao Codex, dos agentes novos, das entregas e do ditado, ele agora leva o registro do Grok. Se você
   roda o auxiliar como serviço, troque o comando para `npm run bridge` quando quiser; o antigo não para de funcionar.
 
+### Corrigido
+
+- **Cartão de uso sem a barra de 5 h quando o plano não a tem.** Conta cuja leitura traz só a janela semanal (o Codex
+  no plano Pro Lite, cujo `rate_limits` vem só com a janela de 10080 min; o Grok) não mostra mais a linha de 5 h com
+  "—": a barra some do cartão e da dica, e a dica do Codex explica que o plano só tem a semana.
+- **Cota do Grok no começo do período.** Na virada da semana o Grok omite o `creditUsagePercent` do log enquanto o
+  valor é 0, e o Habblaud ficava preso na leitura anterior (janela já renovada: o cartão dizia "sem dados"). A linha
+  sem o campo agora vale 0%.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

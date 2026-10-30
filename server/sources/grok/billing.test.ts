@@ -11,8 +11,9 @@ const AT = Date.parse(TS);
 const START = '2026-10-21T20:05:38.827602+00:00';
 const END = '2026-10-28T20:05:38.827602+00:00';
 
-function billingLine(percent: number, o: { ts?: string; tier?: string | null; period?: boolean } = {}): string {
-  const config: Record<string, unknown> = { creditUsagePercent: percent, onDemandCap: { val: 0 }, onDemandUsed: { val: 0 }, prepaidBalance: { val: 0 }, isUnifiedBillingUser: true, historyLen: 0 };
+function billingLine(percent: number | undefined, o: { ts?: string; tier?: string | null; period?: boolean } = {}): string {
+  const config: Record<string, unknown> = { onDemandCap: { val: 0 }, onDemandUsed: { val: 0 }, prepaidBalance: { val: 0 }, isUnifiedBillingUser: true, historyLen: 0 };
+  if (percent !== undefined) config.creditUsagePercent = percent;
   if (o.period !== false) {
     config.currentPeriod = { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: START, end: END };
     config.billingPeriodStart = START;
@@ -43,13 +44,16 @@ describe('parseBillingLine', () => {
     expect(parseBillingLine(billingLine(15))).toEqual({ fetchedAt: AT, weeklyUsedPercent: 15, periodStart: Date.parse(START), periodEnd: Date.parse(END), plan: 'SuperGrok Heavy' });
     expect(parseBillingLine(billingLine(130, { tier: null, period: false }))).toEqual({ fetchedAt: AT, weeklyUsedPercent: 100 });
     expect(parseBillingLine(billingLine(-3))?.weeklyUsedPercent).toBe(0);
+    // Começo do período: o Grok omite o campo zerado (a linha vem só com o período e o plano) → 0%.
+    expect(parseBillingLine(billingLine(undefined))).toEqual({ fetchedAt: AT, weeklyUsedPercent: 0, periodStart: Date.parse(START), periodEnd: Date.parse(END), plan: 'SuperGrok Heavy' });
   });
 
   it('outras linhas, JSON quebrado, sem percentual ou sem horário: nada', () => {
     expect(parseBillingLine(OTHER)).toBeUndefined();
     expect(parseBillingLine('')).toBeUndefined();
     expect(parseBillingLine('{"msg":"billing: fetched credits config"')).toBeUndefined();
-    expect(parseBillingLine(JSON.stringify({ ts: TS, msg: 'billing: fetched credits config', ctx: { config: {} } }))).toBeUndefined();
+    expect(parseBillingLine(JSON.stringify({ ts: TS, msg: 'billing: fetched credits config', ctx: {} }))).toBeUndefined();
+    expect(parseBillingLine(JSON.stringify({ ts: TS, msg: 'billing: fetched credits config', ctx: { config: 'x' } }))).toBeUndefined();
     expect(parseBillingLine(JSON.stringify({ ts: 'ontem', msg: 'billing: fetched credits config', ctx: { config: { creditUsagePercent: 1 } } }))).toBeUndefined();
     // A mensagem como texto de outra linha não engana.
     expect(parseBillingLine(JSON.stringify({ ts: TS, msg: 'x', note: 'billing: fetched credits config' }))).toBeUndefined();
